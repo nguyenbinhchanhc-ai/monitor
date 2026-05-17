@@ -144,13 +144,13 @@ struct ContentView: View {
                 Text("Tối Ưu")
             }
             
-            // TAB 3: Khám Phá File
+            // TAB 3: Đặc Quyền
             NavigationView {
-                FileExplorerView()
+                SecurityScannerView()
             }
             .tabItem {
-                Image(systemName: "folder.fill")
-                Text("File Hệ Thống")
+                Image(systemName: "lock.shield.fill")
+                Text("Đặc Quyền")
             }
         }
     }
