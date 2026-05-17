@@ -64,11 +64,29 @@ struct ContentView: View {
                     
                     Section(header: Text("Pin & Nhiệt Độ")) {
                         HStack {
-                            Text("Mức sạc hiện tại")
+                            Text("Mức sạc (API Apple)")
                             Spacer()
-                            Text(monitor.batteryLevel >= 0 ? String(format: "%.0f %%", monitor.batteryLevel * 100) : "Không rõ")
-                                .bold()
+                            if monitor.batteryLevel >= 0 {
+                                Text(String(format: "%.0f %%", monitor.batteryLevel * 100))
+                                    .bold()
+                            } else {
+                                Text("Không rõ").bold()
+                            }
                         }
+                        HStack {
+                            Text("Giá trị thô (Raw)")
+                            Spacer()
+                            if monitor.batteryLevel >= 0 {
+                                Text(String(format: "%.2f", monitor.batteryLevel))
+                                    .bold()
+                                    .foregroundColor(.gray)
+                            } else {
+                                Text("-1").bold().foregroundColor(.gray)
+                            }
+                        }
+                        Text("⚠️ Apple làm tròn pin theo bước 5% (95→100). Con số chính xác trên thanh trạng thái dùng API riêng mà app bên thứ 3 không được phép truy cập.")
+                            .font(.caption2)
+                            .foregroundColor(.orange)
                         HStack {
                             Text("Trạng thái nhiệt")
                             Spacer()
