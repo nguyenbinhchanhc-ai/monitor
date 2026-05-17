@@ -11,9 +11,13 @@ class CleanerManager: ObservableObject {
     
     // Dọn tự động
     @Published var autoCleanEnabled: Bool = false
-    @Published var autoCleanThresholdMB: Double = 300 // Khi RAM trống dưới 300MB thì tự dọn
+    @Published var autoCleanThresholdMB: Double = 300
+    @Published var autoCleanInterval: Double = 30 // giây
+    @Published var autoCleanMode: CleanMode = .normal
     @Published var autoCleanCount: Int = 0
+    @Published var autoCleanLastTime: String = ""
     private var autoCleanTimer: Timer?
+    private weak var monitorRef: SystemMonitorManager?
     
     // Chế độ dọn
     enum CleanMode: String, CaseIterable {
@@ -51,42 +55,75 @@ class CleanerManager: ObservableObject {
             case .deep: passes = 3
             }
             
-            // Bước 1: Xoá Cache trước khi ép RAM (chỉ ở chế độ deep)
-            if mode == .deep {
+            // Bước 1: Xoá Cache (chế độ normal + deep)
+            if mode == .deep || mode == .normal {
                 DispatchQueue.main.async { self.message = "Xoá Cache hệ thống..." }
-                logLines.append("── XOÁ CACHE ──")
+                logLines.append("── XOÁ CACHE CỦA APP NÀY ──")
                 
+                // 1. HTTP Cache (URLSession)
                 let urlCacheBefore = Double(URLCache.shared.currentDiskUsage) / (1024*1024)
                 URLCache.shared.removeAllCachedResponses()
+                URLCache.shared.diskCapacity = 0
+                URLCache.shared.memoryCapacity = 0
+                let urlCacheAfter = Double(URLCache.shared.currentDiskUsage) / (1024*1024)
+                logLines.append("✅ HTTP Cache: xoá \(String(format: "%.1f", urlCacheBefore - urlCacheAfter)) MB")
                 
+                // Reset lại capacity
+                URLCache.shared.diskCapacity = 50 * 1024 * 1024
+                URLCache.shared.memoryCapacity = 10 * 1024 * 1024
+                
+                // 2. Cookies
                 if let cookies = HTTPCookieStorage.shared.cookies {
                     let count = cookies.count
                     for c in cookies { HTTPCookieStorage.shared.deleteCookie(c) }
                     logLines.append("✅ Xoá \(count) cookies")
                 }
                 
-                // Xoá tmp
+                // 3. File tạm (tmp)
                 let tmpDir = NSTemporaryDirectory()
                 var tmpCount = 0
+                var tmpSizeMB: Double = 0
                 if let files = try? FileManager.default.contentsOfDirectory(atPath: tmpDir) {
                     for f in files {
-                        try? FileManager.default.removeItem(atPath: (tmpDir as NSString).appendingPathComponent(f))
+                        let p = (tmpDir as NSString).appendingPathComponent(f)
+                        if let a = try? FileManager.default.attributesOfItem(atPath: p),
+                           let s = a[.size] as? UInt64 { tmpSizeMB += Double(s) / (1024*1024) }
+                        try? FileManager.default.removeItem(atPath: p)
                         tmpCount += 1
                     }
                 }
+                logLines.append("✅ Xoá \(tmpCount) file tạm (\(String(format: "%.1f", tmpSizeMB)) MB)")
                 
-                // Xoá Caches dir
+                // 4. Thư mục Caches
+                var cacheCount = 0
+                var cacheSizeMB: Double = 0
                 if let cachePath = NSSearchPathForDirectoriesInDomains(.cachesDirectory, .userDomainMask, true).first,
                    let files = try? FileManager.default.contentsOfDirectory(atPath: cachePath) {
                     for f in files {
-                        try? FileManager.default.removeItem(atPath: (cachePath as NSString).appendingPathComponent(f))
-                        tmpCount += 1
+                        let p = (cachePath as NSString).appendingPathComponent(f)
+                        if let a = try? FileManager.default.attributesOfItem(atPath: p),
+                           let s = a[.size] as? UInt64 { cacheSizeMB += Double(s) / (1024*1024) }
+                        try? FileManager.default.removeItem(atPath: p)
+                        cacheCount += 1
+                    }
+                }
+                logLines.append("✅ Xoá \(cacheCount) mục trong Caches (\(String(format: "%.1f", cacheSizeMB)) MB)")
+                
+                // 5. Library/WebKit (nếu có)
+                if let libPath = NSSearchPathForDirectoriesInDomains(.libraryDirectory, .userDomainMask, true).first {
+                    let webkitPath = (libPath as NSString).appendingPathComponent("WebKit")
+                    if FileManager.default.fileExists(atPath: webkitPath) {
+                        try? FileManager.default.removeItem(atPath: webkitPath)
+                        logLines.append("✅ Xoá WebKit Cache")
                     }
                 }
                 
-                let urlCacheAfter = Double(URLCache.shared.currentDiskUsage) / (1024*1024)
-                logLines.append("✅ Xoá \(tmpCount) file tạm")
-                logLines.append("✅ Xoá \(String(format: "%.1f", urlCacheBefore - urlCacheAfter)) MB HTTP Cache")
+                logLines.append("")
+                logLines.append("── XOÁ CACHE APP KHÁC (gián tiếp) ──")
+                logLines.append("ℹ️ iOS Sandbox KHÔNG cho phép truy cập trực tiếp")
+                logLines.append("ℹ️ thư mục Cache của app khác.")
+                logLines.append("ℹ️ → Dùng Memory Pressure ở bước tiếp để ÉP iOS")
+                logLines.append("ℹ️ tự xoá cache + tắt app ngầm của TẤT CẢ app.")
                 logLines.append("")
                 
                 Thread.sleep(forTimeInterval: 0.5)
@@ -176,21 +213,35 @@ class CleanerManager: ObservableObject {
     
     func toggleAutoClean(monitor: SystemMonitorManager) {
         autoCleanEnabled.toggle()
+        monitorRef = monitor
         
         if autoCleanEnabled {
-            // Kiểm tra mỗi 30 giây
-            autoCleanTimer = Timer.scheduledTimer(withTimeInterval: 30.0, repeats: true) { [weak self] _ in
-                guard let self = self, self.autoCleanEnabled, !self.isCleaningRAM else { return }
-                
-                let availMB = Double(os_proc_available_memory()) / (1024*1024)
-                if availMB < self.autoCleanThresholdMB {
-                    self.autoCleanCount += 1
-                    self.cleanRAM(monitor: monitor, mode: .normal)
-                }
-            }
+            startAutoCleanTimer(monitor: monitor)
         } else {
             autoCleanTimer?.invalidate()
             autoCleanTimer = nil
+        }
+    }
+    
+    func restartAutoClean() {
+        guard autoCleanEnabled, let monitor = monitorRef else { return }
+        autoCleanTimer?.invalidate()
+        startAutoCleanTimer(monitor: monitor)
+    }
+    
+    private func startAutoCleanTimer(monitor: SystemMonitorManager) {
+        autoCleanTimer?.invalidate()
+        autoCleanTimer = Timer.scheduledTimer(withTimeInterval: autoCleanInterval, repeats: true) { [weak self] _ in
+            guard let self = self, self.autoCleanEnabled, !self.isCleaningRAM else { return }
+            
+            let availMB = Double(os_proc_available_memory()) / (1024*1024)
+            if availMB < self.autoCleanThresholdMB {
+                self.autoCleanCount += 1
+                let f = DateFormatter()
+                f.dateFormat = "HH:mm:ss"
+                self.autoCleanLastTime = f.string(from: Date())
+                self.cleanRAM(monitor: monitor, mode: self.autoCleanMode)
+            }
         }
     }
     

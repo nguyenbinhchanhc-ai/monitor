@@ -107,7 +107,8 @@ struct CleanerView: View {
     }
     
     var autoCleanSection: some View {
-        VStack(spacing: 10) {
+        VStack(spacing: 12) {
+            // Toggle chính
             HStack {
                 Image(systemName: "arrow.clockwise.circle.fill")
                     .foregroundColor(.blue)
@@ -120,27 +121,65 @@ struct CleanerView: View {
             }
             
             if cleaner.autoCleanEnabled {
-                HStack {
-                    Text("Ngưỡng kích hoạt:")
-                        .font(.caption).foregroundColor(.gray)
-                    Spacer()
-                    Text("Khi RAM trống < \(Int(cleaner.autoCleanThresholdMB)) MB")
-                        .font(.caption).foregroundColor(.orange)
-                }
-                HStack {
-                    Text("Tần suất kiểm tra:")
-                        .font(.caption).foregroundColor(.gray)
-                    Spacer()
-                    Text("Mỗi 30 giây")
-                        .font(.caption).foregroundColor(.blue)
-                }
-                if cleaner.autoCleanCount > 0 {
+                // Ngưỡng RAM
+                VStack(alignment: .leading, spacing: 4) {
                     HStack {
-                        Text("Số lần đã tự dọn:")
-                            .font(.caption).foregroundColor(.gray)
+                        Text("Ngưỡng kích hoạt").font(.caption).foregroundColor(.gray)
                         Spacer()
-                        Text("\(cleaner.autoCleanCount) lần")
-                            .font(.caption).bold().foregroundColor(.green)
+                        Text("< \(Int(cleaner.autoCleanThresholdMB)) MB").font(.caption).bold().foregroundColor(.orange)
+                    }
+                    Slider(value: $cleaner.autoCleanThresholdMB, in: 100...1000, step: 50)
+                        .accentColor(.orange)
+                        .onChange(of: cleaner.autoCleanThresholdMB) { _ in cleaner.restartAutoClean() }
+                    HStack {
+                        Text("100 MB").font(.caption2).foregroundColor(.gray)
+                        Spacer()
+                        Text("1000 MB").font(.caption2).foregroundColor(.gray)
+                    }
+                }
+                
+                // Tần suất kiểm tra
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack {
+                        Text("Tần suất kiểm tra").font(.caption).foregroundColor(.gray)
+                        Spacer()
+                        Text("Mỗi \(Int(cleaner.autoCleanInterval))s").font(.caption).bold().foregroundColor(.blue)
+                    }
+                    Slider(value: $cleaner.autoCleanInterval, in: 10...120, step: 10)
+                        .accentColor(.blue)
+                        .onChange(of: cleaner.autoCleanInterval) { _ in cleaner.restartAutoClean() }
+                    HStack {
+                        Text("10s (nhanh)").font(.caption2).foregroundColor(.gray)
+                        Spacer()
+                        Text("120s (tiết kiệm pin)").font(.caption2).foregroundColor(.gray)
+                    }
+                }
+                
+                // Chế độ dọn tự động
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Chế độ dọn khi tự động").font(.caption).foregroundColor(.gray)
+                    Picker("AutoMode", selection: $cleaner.autoCleanMode) {
+                        ForEach(CleanerManager.CleanMode.allCases, id: \.self) { mode in
+                            Text(mode.rawValue).tag(mode)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .onChange(of: cleaner.autoCleanMode) { _ in cleaner.restartAutoClean() }
+                }
+                
+                // Thống kê
+                VStack(spacing: 6) {
+                    HStack {
+                        Text("Số lần đã tự dọn:").font(.caption).foregroundColor(.gray)
+                        Spacer()
+                        Text("\(cleaner.autoCleanCount) lần").font(.caption).bold().foregroundColor(.green)
+                    }
+                    if !cleaner.autoCleanLastTime.isEmpty {
+                        HStack {
+                            Text("Lần cuối dọn:").font(.caption).foregroundColor(.gray)
+                            Spacer()
+                            Text(cleaner.autoCleanLastTime).font(.caption).bold().foregroundColor(.blue)
+                        }
                     }
                 }
             }
