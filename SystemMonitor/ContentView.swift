@@ -3,6 +3,7 @@ import SwiftUI
 struct ContentView: View {
     @StateObject private var monitor = SystemMonitorManager()
     @StateObject private var cleaner = CleanerManager()
+    @ObservedObject private var bgKeepAlive = BackgroundKeepAlive.shared
     
     var body: some View {
         TabView {
@@ -94,6 +95,26 @@ struct ContentView: View {
                                 .foregroundColor(colorForThermalState(monitor.thermalState))
                                 .bold()
                         }
+                    }
+                    
+                    Section(header: Text("Chạy Ngầm")) {
+                        HStack {
+                            Image(systemName: bgKeepAlive.isBackgroundEnabled ? "location.fill" : "location.slash")
+                                .foregroundColor(bgKeepAlive.isBackgroundEnabled ? .green : .gray)
+                            Toggle("Giữ app sống khi ẩn", isOn: Binding(
+                                get: { bgKeepAlive.isBackgroundEnabled },
+                                set: { newValue in
+                                    if newValue { bgKeepAlive.startBackground() }
+                                    else { bgKeepAlive.stopBackground() }
+                                }
+                            ))
+                        }
+                        Text(bgKeepAlive.status)
+                            .font(.caption)
+                            .foregroundColor(.gray)
+                        Text("Dùng quyền Vị trí (độ chính xác thấp nhất) để iOS không tự tắt app. Hao pin rất ít.")
+                            .font(.caption2)
+                            .foregroundColor(.orange)
                     }
                 }
                 .navigationTitle("Giám Sát")
