@@ -101,7 +101,34 @@ class SystemMonitorManager: ObservableObject {
     }
     
     func getBatteryHealth() -> (health: Double, cycleCount: Int) {
-        let service = IOServiceGetMatchingService(0, IOServiceMatching("AppleSmartBattery"))
+        let handle = dlopen("/System/Library/Frameworks/IOKit.framework/IOKit", RTLD_NOW)
+        guard handle != nil else { return (-1, -1) }
+        
+        defer { dlclose(handle) }
+        
+        let symMatching = dlsym(handle, "IOServiceMatching")
+        let symGetService = dlsym(handle, "IOServiceGetMatchingService")
+        let symCreateProp = dlsym(handle, "IORegistryEntryCreateCFProperty")
+        let symRelease = dlsym(handle, "IOObjectRelease")
+        
+        guard let symMatching = symMatching,
+              let symGetService = symGetService,
+              let symCreateProp = symCreateProp,
+              let symRelease = symRelease else { return (-1, -1) }
+        
+        typealias IOServiceMatchingFunc = @convention(c) (UnsafePointer<CChar>) -> Unmanaged<CFMutableDictionary>?
+        typealias IOServiceGetMatchingServiceFunc = @convention(c) (mach_port_t, Unmanaged<CFMutableDictionary>?) -> mach_port_t
+        typealias IORegistryEntryCreateCFPropertyFunc = @convention(c) (mach_port_t, CFString, Unmanaged<CFAllocator>?, UInt32) -> Unmanaged<AnyObject>?
+        typealias IOObjectReleaseFunc = @convention(c) (mach_port_t) -> kern_return_t
+        
+        let IOServiceMatching = unsafeBitCast(symMatching, to: IOServiceMatchingFunc.self)
+        let IOServiceGetMatchingService = unsafeBitCast(symGetService, to: IOServiceGetMatchingServiceFunc.self)
+        let IORegistryEntryCreateCFProperty = unsafeBitCast(symCreateProp, to: IORegistryEntryCreateCFPropertyFunc.self)
+        let IOObjectRelease = unsafeBitCast(symRelease, to: IOObjectReleaseFunc.self)
+        
+        let dict = IOServiceMatching("AppleSmartBattery")
+        let service = IOServiceGetMatchingService(0, dict)
+        
         if service != 0 {
             let maxCapRaw = IORegistryEntryCreateCFProperty(service, "AppleRawMaxCapacity" as CFString, nil, 0)
             let designCapRaw = IORegistryEntryCreateCFProperty(service, "DesignCapacity" as CFString, nil, 0)
@@ -111,11 +138,11 @@ class SystemMonitorManager: ObservableObject {
             var designCap: Double = 0
             var cycles: Int = 0
             
-            if let max = maxCapRaw as? NSNumber { maxCap = max.doubleValue }
-            if let design = designCapRaw as? NSNumber { designCap = design.doubleValue }
-            if let cycle = cycleCountRaw as? NSNumber { cycles = cycle.intValue }
+            if let max = maxCapRaw?.takeRetainedValue() as? NSNumber { maxCap = max.doubleValue }
+            if let design = designCapRaw?.takeRetainedValue() as? NSNumber { designCap = design.doubleValue }
+            if let cycle = cycleCountRaw?.takeRetainedValue() as? NSNumber { cycles = cycle.intValue }
             
-            IOObjectRelease(service)
+            _ = IOObjectRelease(service)
             
             if designCap > 0 {
                 return (health: (maxCap / designCap) * 100.0, cycleCount: cycles)
