@@ -14,7 +14,7 @@ struct ContentView: View {
                             .foregroundColor(colorForUsage(monitor.cpuUsage))
                             .bold()
                     }
-                    ProgressView(value: min(monitor.cpuUsage / 100.0, 1.0))
+                    ProgressView(value: max(0.0, min(monitor.cpuUsage / 100.0, 1.0)))
                         .accentColor(colorForUsage(monitor.cpuUsage))
                 }
                 
@@ -26,7 +26,7 @@ struct ContentView: View {
                             .foregroundColor(colorForUsage((monitor.usedRAM / max(monitor.totalRAM, 1)) * 100))
                             .bold()
                     }
-                    ProgressView(value: min(monitor.usedRAM / max(monitor.totalRAM, 1), 1.0))
+                    ProgressView(value: max(0.0, min(monitor.usedRAM / max(monitor.totalRAM, 1), 1.0)))
                         .accentColor(colorForUsage((monitor.usedRAM / max(monitor.totalRAM, 1)) * 100))
                 }
                 

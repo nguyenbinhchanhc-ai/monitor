@@ -52,15 +52,18 @@ class SystemMonitorManager: ObservableObject {
             
             if let prevInfo = prevCpuInfo {
                 for i in 0..<Int(numCPUs) {
-                    let inUseNow = cpuInfo[Int(CPU_STATE_MAX) * i + Int(CPU_STATE_USER)]
-                                 + cpuInfo[Int(CPU_STATE_MAX) * i + Int(CPU_STATE_SYSTEM)]
-                                 + cpuInfo[Int(CPU_STATE_MAX) * i + Int(CPU_STATE_NICE)]
-                    let inUsePrev = prevInfo[Int(CPU_STATE_MAX) * i + Int(CPU_STATE_USER)]
-                                  + prevInfo[Int(CPU_STATE_MAX) * i + Int(CPU_STATE_SYSTEM)]
-                                  + prevInfo[Int(CPU_STATE_MAX) * i + Int(CPU_STATE_NICE)]
+                    let userNow = Double(cpuInfo[Int(CPU_STATE_MAX) * i + Int(CPU_STATE_USER)])
+                    let sysNow = Double(cpuInfo[Int(CPU_STATE_MAX) * i + Int(CPU_STATE_SYSTEM)])
+                    let niceNow = Double(cpuInfo[Int(CPU_STATE_MAX) * i + Int(CPU_STATE_NICE)])
+                    let inUseNow = userNow + sysNow + niceNow
                     
-                    let idleNow = cpuInfo[Int(CPU_STATE_MAX) * i + Int(CPU_STATE_IDLE)]
-                    let idlePrev = prevInfo[Int(CPU_STATE_MAX) * i + Int(CPU_STATE_IDLE)]
+                    let userPrev = Double(prevInfo[Int(CPU_STATE_MAX) * i + Int(CPU_STATE_USER)])
+                    let sysPrev = Double(prevInfo[Int(CPU_STATE_MAX) * i + Int(CPU_STATE_SYSTEM)])
+                    let nicePrev = Double(prevInfo[Int(CPU_STATE_MAX) * i + Int(CPU_STATE_NICE)])
+                    let inUsePrev = userPrev + sysPrev + nicePrev
+                    
+                    let idleNow = Double(cpuInfo[Int(CPU_STATE_MAX) * i + Int(CPU_STATE_IDLE)])
+                    let idlePrev = Double(prevInfo[Int(CPU_STATE_MAX) * i + Int(CPU_STATE_IDLE)])
                     
                     let useDelta = Double(inUseNow - inUsePrev)
                     let idleDelta = Double(idleNow - idlePrev)
@@ -102,11 +105,11 @@ class SystemMonitorManager: ObservableObject {
         let total = ProcessInfo.processInfo.physicalMemory
         
         if result == KERN_SUCCESS {
-            let active = vm_stat.active_count * UInt32(pagesize)
-            let wired = vm_stat.wire_count * UInt32(pagesize)
-            let compressed = vm_stat.compressor_page_count * UInt32(pagesize)
+            let active = Double(vm_stat.active_count) * Double(pagesize)
+            let wired = Double(vm_stat.wire_count) * Double(pagesize)
+            let compressed = Double(vm_stat.compressor_page_count) * Double(pagesize)
             let used = active + wired + compressed
-            return (used: Double(used) / (1024 * 1024), total: Double(total) / (1024 * 1024))
+            return (used: used / (1024 * 1024), total: Double(total) / (1024 * 1024))
         }
         
         return (0, Double(total) / (1024 * 1024))
