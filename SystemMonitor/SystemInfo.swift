@@ -14,11 +14,6 @@ class SystemMonitorManager: ObservableObject {
     @Published var usedDisk: Double = 0.0
     @Published var totalDisk: Double = 0.0
     @Published var lowPowerMode: Bool = false
-    @Published var batteryHealth: Double = -1
-    @Published var batteryCycles: Int = -1
-    @Published var chargingPower: Double = 0.0 // Watt
-    
-    @Published var cpuFrequency: Int = 0
     
     private var timer: Timer?
     
@@ -55,16 +50,6 @@ class SystemMonitorManager: ObservableObject {
         self.usedDisk = disk.used
         self.totalDisk = disk.total
         self.lowPowerMode = ProcessInfo.processInfo.isLowPowerModeEnabled
-        
-        let batIOKit = getBatteryHealth()
-        self.batteryHealth = batIOKit.health
-        self.batteryCycles = batIOKit.cycleCount
-        self.chargingPower = batIOKit.power
-        
-        var freq: Int = 0
-        var size = MemoryLayout<Int>.size
-        sysctlbyname("hw.cpufrequency_max", &freq, &size, nil, 0)
-        self.cpuFrequency = freq
     }
     
     func getDeviceModel() -> String {
@@ -90,7 +75,6 @@ class SystemMonitorManager: ObservableObject {
     
     func getDiskSpace() -> (used: Double, total: Double) {
         do {
-            let attrs = try FileManager.default.attributesOfItem(atPath: NSHomeDirectory())
             let systemAttrs = try FileManager.default.attributesOfFileSystem(forPath: NSHomeDirectory())
             let total = systemAttrs[.systemSize] as? NSNumber
             let free = systemAttrs[.systemFreeSize] as? NSNumber
@@ -100,65 +84,6 @@ class SystemMonitorManager: ObservableObject {
             }
         } catch {}
         return (0, 0)
-    }
-    
-    func getBatteryHealth() -> (health: Double, cycleCount: Int, power: Double) {
-        let handle = dlopen("/System/Library/Frameworks/IOKit.framework/IOKit", RTLD_NOW)
-        guard handle != nil else { return (-1, -1, 0) }
-        
-        defer { dlclose(handle) }
-        
-        let symMatching = dlsym(handle, "IOServiceMatching")
-        let symGetService = dlsym(handle, "IOServiceGetMatchingService")
-        let symCreateProp = dlsym(handle, "IORegistryEntryCreateCFProperty")
-        let symRelease = dlsym(handle, "IOObjectRelease")
-        
-        guard let symMatching = symMatching,
-              let symGetService = symGetService,
-              let symCreateProp = symCreateProp,
-              let symRelease = symRelease else { return (-1, -1, 0) }
-        
-        typealias IOServiceMatchingFunc = @convention(c) (UnsafePointer<CChar>) -> Unmanaged<CFMutableDictionary>?
-        typealias IOServiceGetMatchingServiceFunc = @convention(c) (mach_port_t, Unmanaged<CFMutableDictionary>?) -> mach_port_t
-        typealias IORegistryEntryCreateCFPropertyFunc = @convention(c) (mach_port_t, CFString, Unmanaged<CFAllocator>?, UInt32) -> Unmanaged<AnyObject>?
-        typealias IOObjectReleaseFunc = @convention(c) (mach_port_t) -> kern_return_t
-        
-        let IOServiceMatching = unsafeBitCast(symMatching, to: IOServiceMatchingFunc.self)
-        let IOServiceGetMatchingService = unsafeBitCast(symGetService, to: IOServiceGetMatchingServiceFunc.self)
-        let IORegistryEntryCreateCFProperty = unsafeBitCast(symCreateProp, to: IORegistryEntryCreateCFPropertyFunc.self)
-        let IOObjectRelease = unsafeBitCast(symRelease, to: IOObjectReleaseFunc.self)
-        
-        let dict = IOServiceMatching("AppleSmartBattery")
-        let service = IOServiceGetMatchingService(0, dict)
-        
-        if service != 0 {
-            let maxCapRaw = IORegistryEntryCreateCFProperty(service, "AppleRawMaxCapacity" as CFString, nil, 0)
-            let designCapRaw = IORegistryEntryCreateCFProperty(service, "DesignCapacity" as CFString, nil, 0)
-            let cycleCountRaw = IORegistryEntryCreateCFProperty(service, "CycleCount" as CFString, nil, 0)
-            let voltageRaw = IORegistryEntryCreateCFProperty(service, "Voltage" as CFString, nil, 0)
-            let amperageRaw = IORegistryEntryCreateCFProperty(service, "Amperage" as CFString, nil, 0)
-            
-            var maxCap: Double = 0
-            var designCap: Double = 0
-            var cycles: Int = 0
-            var voltage: Int = 0
-            var amperage: Int = 0
-            
-            if let max = maxCapRaw?.takeRetainedValue() as? NSNumber { maxCap = max.doubleValue }
-            if let design = designCapRaw?.takeRetainedValue() as? NSNumber { designCap = design.doubleValue }
-            if let cycle = cycleCountRaw?.takeRetainedValue() as? NSNumber { cycles = cycle.intValue }
-            if let v = voltageRaw?.takeRetainedValue() as? NSNumber { voltage = v.intValue }
-            if let a = amperageRaw?.takeRetainedValue() as? NSNumber { amperage = a.intValue }
-            
-            _ = IOObjectRelease(service)
-            
-            let power = (Double(abs(amperage)) * Double(voltage)) / 1000000.0 // mV * mA = uW -> W
-            
-            if designCap > 0 {
-                return (health: (maxCap / designCap) * 100.0, cycleCount: cycles, power: power)
-            }
-        }
-        return (health: -1, cycleCount: -1, power: 0)
     }
     
     func getCPUUsage() -> Double {

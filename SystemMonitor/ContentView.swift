@@ -9,7 +9,7 @@ struct ContentView: View {
             // TAB 1: Giám Sát
             NavigationView {
                 List {
-                    Section(header: Text("Chẩn Đoán Lỗi & Thông Số Cơ Bản")) {
+                    Section(header: Text("Thông Số Cơ Bản")) {
                         HStack {
                             Text("Dòng máy")
                             Spacer()
@@ -39,15 +39,6 @@ struct ContentView: View {
                     }
 
                     Section(header: Text("Bộ Xử Lý (CPU)")) {
-                        HStack {
-                            Text("Xung nhịp tối đa")
-                            Spacer()
-                            if monitor.cpuFrequency > 0 {
-                                Text("\(monitor.cpuFrequency / 1000000) MHz").bold()
-                            } else {
-                                Text("Bị Apple chặn").bold().foregroundColor(.red)
-                            }
-                        }
                         HStack {
                             Text("Mức độ sử dụng")
                             Spacer()
@@ -79,33 +70,6 @@ struct ContentView: View {
                                 .bold()
                         }
                         HStack {
-                            Text("Công suất sạc (Power)")
-                            Spacer()
-                            if monitor.chargingPower > 0 {
-                                Text(String(format: "%.2f W", monitor.chargingPower)).bold()
-                            } else {
-                                Text("Bị Apple chặn / Đã rút").bold().foregroundColor(.red)
-                            }
-                        }
-                        HStack {
-                            Text("Độ chai pin (Battery Health)")
-                            Spacer()
-                            if monitor.batteryHealth > 0 {
-                                Text(String(format: "%.1f %%", monitor.batteryHealth)).bold()
-                            } else {
-                                Text("Bị Apple chặn").bold().foregroundColor(.red)
-                            }
-                        }
-                        HStack {
-                            Text("Chu kỳ sạc (Cycle Count)")
-                            Spacer()
-                            if monitor.batteryCycles >= 0 {
-                                Text("\(monitor.batteryCycles) lần").bold()
-                            } else {
-                                Text("Bị Apple chặn").bold().foregroundColor(.red)
-                            }
-                        }
-                        HStack {
                             Text("Trạng thái nhiệt")
                             Spacer()
                             Text(thermalStateString(monitor.thermalState))
@@ -121,83 +85,61 @@ struct ContentView: View {
                 Text("Giám Sát")
             }
             
-            // TAB 2: Dọn Dẹp
+            // TAB 2: Tối Ưu RAM
             NavigationView {
                 VStack(spacing: 30) {
-                    Text("Cảnh báo: Tính năng này dùng phương pháp ép bộ nhớ, có thể làm nóng máy tạm thời.")
-                        .font(.footnote)
+                    Text("Cơ chế giải phóng RAM: Kích hoạt cảnh báo bộ nhớ (Memory Pressure) buộc hệ điều hành tự động thu hồi RAM và tắt các tiến trình chạy ngầm không cần thiết.")
+                        .font(.subheadline)
                         .foregroundColor(.gray)
                         .multilineTextAlignment(.center)
                         .padding()
                     
                     VStack(spacing: 15) {
                         Image(systemName: "memorychip")
-                            .font(.system(size: 40))
-                            .foregroundColor(.blue)
-                        Text("Dọn Dẹp Bộ Nhớ (RAM)")
-                            .font(.headline)
+                            .font(.system(size: 50))
+                            .foregroundColor(.green)
+                            .padding(.bottom, 10)
+                        
+                        Text("Tối Ưu & Giải Phóng RAM")
+                            .font(.title3)
+                            .bold()
+                        
+                        if cleaner.cleanedAmountMB > 0 {
+                            Text("Đã kích hoạt dọn dẹp ~\(String(format: "%.0f", cleaner.cleanedAmountMB)) MB RAM rác")
+                                .font(.footnote)
+                                .foregroundColor(.green)
+                        }
                         
                         Button(action: {
                             cleaner.cleanRAM()
                         }) {
-                            Text(cleaner.isCleaningRAM ? "Đang ép RAM..." : "Chạy Dọn RAM")
-                                .bold()
+                            Text(cleaner.isCleaningRAM ? "Đang tắt app ngầm..." : "Dọn Dẹp Ngay")
+                                .font(.headline)
                                 .frame(maxWidth: .infinity)
                                 .padding()
-                                .background(cleaner.isCleaningRAM ? Color.gray : Color.blue)
+                                .background(cleaner.isCleaningRAM ? Color.gray : Color.green)
                                 .foregroundColor(.white)
-                                .cornerRadius(10)
+                                .cornerRadius(12)
                         }
                         .disabled(cleaner.isCleaningRAM)
                         
                         if cleaner.isCleaningRAM {
                             ProgressView()
+                                .padding(.top, 10)
                         }
                     }
-                    .padding()
+                    .padding(25)
                     .background(Color(UIColor.secondarySystemBackground))
-                    .cornerRadius(15)
-                    .padding(.horizontal)
-                    
-                    VStack(spacing: 15) {
-                        Image(systemName: "trash.circle")
-                            .font(.system(size: 40))
-                            .foregroundColor(.orange)
-                        Text("Dọn Rác Hệ Thống (Disk)")
-                            .font(.headline)
-                        
-                        Button(action: {
-                            if cleaner.isCleaningJunk {
-                                cleaner.stopCleaningJunk()
-                            } else {
-                                cleaner.cleanJunk()
-                            }
-                        }) {
-                            Text(cleaner.isCleaningJunk ? "Dừng Lấp Ổ Cứng" : "Ép Xoá Rác")
-                                .bold()
-                                .frame(maxWidth: .infinity)
-                                .padding()
-                                .background(cleaner.isCleaningJunk ? Color.red : Color.orange)
-                                .foregroundColor(.white)
-                                .cornerRadius(10)
-                        }
-                        
-                        if cleaner.isCleaningJunk {
-                            ProgressView("Đang lấp đầy ổ cứng...")
-                        }
-                    }
-                    .padding()
-                    .background(Color(UIColor.secondarySystemBackground))
-                    .cornerRadius(15)
+                    .cornerRadius(20)
                     .padding(.horizontal)
                     
                     Spacer()
                 }
-                .navigationTitle("Dọn Dẹp (Thử Nghiệm)")
+                .navigationTitle("Tối Ưu (Tắt App Ngầm)")
             }
             .tabItem {
-                Image(systemName: "sparkles")
-                Text("Dọn Dẹp")
+                Image(systemName: "bolt.fill")
+                Text("Tối Ưu")
             }
         }
     }
