@@ -28,12 +28,13 @@ jobs:
             CODE_SIGN_IDENTITY="" \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGNING_ALLOWED=NO \
+            CONFIGURATION_BUILD_DIR=build \
             build
 
       - name: Package IPA
         run: |
           mkdir -p Payload
-          mv build/Release-iphoneos/SystemMonitor.app Payload/
+          mv build/SystemMonitor.app Payload/
           zip -r SystemMonitor.ipa Payload
 
       - name: Upload IPA Artifact
