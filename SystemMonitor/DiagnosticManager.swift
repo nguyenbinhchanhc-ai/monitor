@@ -39,7 +39,7 @@ class DiagnosticManager: ObservableObject {
             var items: [DiagnosticItem] = []
             var score = 100
             var step = 0.0
-            let total = 8.0
+            let total = 12.0
             
             func next(_ s: String) {
                 step += 1
@@ -175,7 +175,86 @@ class DiagnosticManager: ObservableObject {
                     detail: String(format: "Chạy %.1f ngày.", days), canAutoFix: false, fixAction: ""))
             }
             
-            // 8. PIN
+            // 8. WIRED MEMORY (RAM bị Kernel khoá cứng)
+            next("Kiểm tra Wired Memory (RAM khoá cứng)...")
+            var vmStat2 = vm_statistics64()
+            var vmC2 = mach_msg_type_number_t(MemoryLayout<vm_statistics64>.size / MemoryLayout<integer_t>.size)
+            _ = withUnsafeMutablePointer(to: &vmStat2) {
+                $0.withMemoryRebound(to: integer_t.self, capacity: Int(vmC2)) {
+                    host_statistics64(mach_host_self(), HOST_VM_INFO64, $0, &vmC2)
+                }
+            }
+            var ps2: vm_size_t = 0
+            host_page_size(mach_host_self(), &ps2)
+            let wiredMB = Double(vmStat2.wire_count) * Double(ps2) / (1024*1024)
+            let inactiveMB = Double(vmStat2.inactive_count) * Double(ps2) / (1024*1024)
+            
+            if wiredMB > Double(ram.total) * 0.4 {
+                items.append(DiagnosticItem(name: "Wired Memory quá cao", icon: "lock.fill", status: .warning,
+                    detail: String(format: "Kernel đang khoá cứng %.0f MB RAM (Wired). Đây là vùng nhớ mà iOS giữ cho hệ thống, không thể giải phóng. Khi vượt 40%% tổng RAM → các app bị ép đóng liên tục.", wiredMB),
+                    canAutoFix: false, fixAction: "Restart máy để Kernel giải phóng Wired Memory"))
+                score -= 8
+            } else {
+                items.append(DiagnosticItem(name: "Wired Memory bình thường", icon: "lock.fill", status: .good,
+                    detail: String(format: "Kernel khoá %.0f MB RAM. Mức bình thường.", wiredMB),
+                    canAutoFix: false, fixAction: ""))
+            }
+            
+            // 9. INACTIVE MEMORY (RAM rỗi chưa thu hồi)
+            next("Kiểm tra Inactive Memory...")
+            if inactiveMB > 500 {
+                items.append(DiagnosticItem(name: "RAM rỗi chưa thu hồi", icon: "moon.zzz", status: .warning,
+                    detail: String(format: "%.0f MB RAM đang ở trạng thái Inactive (không dùng nhưng chưa xoá). Đây là dữ liệu cũ của app đã đóng, iOS giữ lại phòng khi cần.", inactiveMB),
+                    canAutoFix: true, fixAction: "Ép Memory Pressure để iOS thu hồi Inactive Memory"))
+                score -= 5
+            } else {
+                items.append(DiagnosticItem(name: "Inactive Memory ổn", icon: "moon.zzz", status: .good,
+                    detail: String(format: "Inactive: %.0f MB. Bình thường.", inactiveMB),
+                    canAutoFix: false, fixAction: ""))
+            }
+            
+            // 10. DISK I/O SPEED (Tốc độ ghi ổ cứng - phát hiện SSD chậm)
+            next("Đo tốc độ ghi ổ cứng (SSD)...")
+            let ioSpeed = self.measureDiskSpeed()
+            if ioSpeed < 50 && ioSpeed > 0 {
+                items.append(DiagnosticItem(name: "SSD ghi CHẬM bất thường", icon: "externaldrive.badge.exclamationmark", status: .critical,
+                    detail: String(format: "Tốc độ ghi: %.0f MB/s. Bình thường phải trên 100 MB/s. SSD chậm gây: App khởi động lâu, chụp ảnh bị đơ, cập nhật iOS thất bại.", ioSpeed),
+                    canAutoFix: true, fixAction: "Xoá file tạm để giảm tải I/O"))
+                score -= 15
+            } else if ioSpeed < 100 && ioSpeed > 0 {
+                items.append(DiagnosticItem(name: "SSD hơi chậm", icon: "externaldrive.badge.exclamationmark", status: .warning,
+                    detail: String(format: "Tốc độ ghi: %.0f MB/s. Hơi chậm so với bình thường.", ioSpeed),
+                    canAutoFix: true, fixAction: "Xoá Cache giảm tải ổ cứng"))
+                score -= 5
+            } else {
+                items.append(DiagnosticItem(name: "SSD nhanh", icon: "externaldrive.fill", status: .good,
+                    detail: String(format: "Tốc độ ghi: %.0f MB/s. Ổ cứng hoạt động tốt.", ioSpeed),
+                    canAutoFix: false, fixAction: ""))
+            }
+            
+            // 11. THREAD COUNT (Số luồng xử lý)
+            next("Đếm số luồng đang chạy...")
+            var threadList: thread_act_array_t?
+            var threadCount: mach_msg_type_number_t = 0
+            let tkr = task_threads(mach_task_self_, &threadList, &threadCount)
+            if tkr == KERN_SUCCESS {
+                if let tl = threadList {
+                    vm_deallocate(mach_task_self_, vm_address_t(bitPattern: tl), vm_size_t(Int(threadCount) * MemoryLayout<thread_act_t>.size))
+                }
+            }
+            
+            if threadCount > 50 {
+                items.append(DiagnosticItem(name: "Quá nhiều luồng xử lý", icon: "chart.bar.fill", status: .warning,
+                    detail: "App đang chạy \(threadCount) threads. Quá nhiều luồng gây tranh chấp CPU và hao pin.",
+                    canAutoFix: false, fixAction: "Restart app để reset threads"))
+                score -= 5
+            } else {
+                items.append(DiagnosticItem(name: "Thread count tốt", icon: "chart.bar.fill", status: .good,
+                    detail: "Đang chạy \(threadCount) threads. Bình thường.",
+                    canAutoFix: false, fixAction: ""))
+            }
+            
+            // 12. PIN
             next("Kiểm tra pin...")
             let bat = UIDevice.current.batteryLevel
             if bat >= 0 && bat < 0.1 {
@@ -264,17 +343,37 @@ class DiagnosticManager: ObservableObject {
     }
     
     private func forceMemoryPressure() {
-        let chunk = 50 * 1024 * 1024
-        var ptrs: [UnsafeMutableRawPointer] = []
-        while true {
-            if os_proc_available_memory() < 150 * 1024 * 1024 { break }
-            let p = mmap(nil, chunk, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0)
-            if p != MAP_FAILED, let v = p { memset(v, 0, chunk); ptrs.append(v) } else { break }
-            Thread.sleep(forTimeInterval: 0.02)
+        // Chạy 2 vòng Memory Pressure để đảm bảo iOS dọn triệt để
+        for pass in 1...2 {
+            let chunk = 50 * 1024 * 1024
+            var ptrs: [UnsafeMutableRawPointer] = []
+            while true {
+                if os_proc_available_memory() < 120 * 1024 * 1024 { break }
+                let p = mmap(nil, chunk, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0)
+                if p != MAP_FAILED, let v = p { memset(v, 0, chunk); ptrs.append(v) } else { break }
+                Thread.sleep(forTimeInterval: 0.01)
+            }
+            Thread.sleep(forTimeInterval: 2.0)
+            for p in ptrs { munmap(p, chunk) }
+            if pass < 2 { Thread.sleep(forTimeInterval: 1.0) }
         }
-        Thread.sleep(forTimeInterval: 2.0)
-        for p in ptrs { munmap(p, chunk) }
         Thread.sleep(forTimeInterval: 1.0)
+    }
+    
+    private func measureDiskSpeed() -> Double {
+        let tmpPath = (NSTemporaryDirectory() as NSString).appendingPathComponent("speed_test.tmp")
+        let size = 10 * 1024 * 1024 // 10MB
+        let data = Data(count: size)
+        let start = Date()
+        do {
+            try data.write(to: URL(fileURLWithPath: tmpPath))
+            let elapsed = Date().timeIntervalSince(start)
+            try? FileManager.default.removeItem(atPath: tmpPath)
+            if elapsed > 0 {
+                return Double(size) / (1024 * 1024) / elapsed // MB/s
+            }
+        } catch {}
+        return 0
     }
     
     private func clearNetworkCaches() {
