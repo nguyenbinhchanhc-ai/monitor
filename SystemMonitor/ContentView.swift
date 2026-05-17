@@ -105,57 +105,7 @@ struct ContentView: View {
             
             // TAB 2: Tối Ưu RAM
             NavigationView {
-                VStack(spacing: 30) {
-                    Text("Cơ chế giải phóng RAM: Kích hoạt cảnh báo bộ nhớ (Memory Pressure) buộc hệ điều hành tự động thu hồi RAM và tắt các tiến trình chạy ngầm không cần thiết.")
-                        .font(.subheadline)
-                        .foregroundColor(.gray)
-                        .multilineTextAlignment(.center)
-                        .padding()
-                    
-                    VStack(spacing: 15) {
-                        Image(systemName: "memorychip")
-                            .font(.system(size: 50))
-                            .foregroundColor(.green)
-                            .padding(.bottom, 10)
-                        
-                        Text("Tối Ưu & Giải Phóng RAM")
-                            .font(.title3)
-                            .bold()
-                        
-                        if !cleaner.message.isEmpty {
-                            Text(cleaner.message)
-                                .font(.footnote)
-                                .foregroundColor(cleaner.cleanedAmountMB > 0 ? .green : .gray)
-                                .multilineTextAlignment(.center)
-                                .padding(.horizontal)
-                        }
-                        
-                        Button(action: {
-                            cleaner.cleanRAM(monitor: monitor)
-                        }) {
-                            Text(cleaner.isCleaningRAM ? "Đang xử lý..." : "Dọn Dẹp Ngay")
-                                .font(.headline)
-                                .frame(maxWidth: .infinity)
-                                .padding()
-                                .background(cleaner.isCleaningRAM ? Color.gray : Color.green)
-                                .foregroundColor(.white)
-                                .cornerRadius(12)
-                        }
-                        .disabled(cleaner.isCleaningRAM)
-                        
-                        if cleaner.isCleaningRAM {
-                            ProgressView()
-                                .padding(.top, 10)
-                        }
-                    }
-                    .padding(25)
-                    .background(Color(UIColor.secondarySystemBackground))
-                    .cornerRadius(20)
-                    .padding(.horizontal)
-                    
-                    Spacer()
-                }
-                .navigationTitle("Tối Ưu (Tắt App Ngầm)")
+                CleanerView(cleaner: cleaner, monitor: monitor)
             }
             .tabItem {
                 Image(systemName: "bolt.fill")

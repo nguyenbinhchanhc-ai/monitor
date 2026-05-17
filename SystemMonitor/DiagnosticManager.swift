@@ -28,6 +28,7 @@ class DiagnosticManager: ObservableObject {
     @Published var totalFixable: Int = 0
     @Published var beforeScore: Int = 0
     @Published var showComparison = false
+    @Published var fixLog: [String] = [] // Nhật ký sửa lỗi chi tiết
     
     func runFullDiagnostic(monitor: SystemMonitorManager) {
         isScanning = true
@@ -200,16 +201,17 @@ class DiagnosticManager: ObservableObject {
                     canAutoFix: false, fixAction: ""))
             }
             
-            // 9. INACTIVE MEMORY (RAM rỗi chưa thu hồi)
+            // 9. INACTIVE MEMORY
             next("Kiểm tra Inactive Memory...")
-            if inactiveMB > 500 {
+            let inactivePercent = (inactiveMB / max(ram.total, 1)) * 100
+            if inactivePercent > 30 {
                 items.append(DiagnosticItem(name: "RAM rỗi chưa thu hồi", icon: "moon.zzz", status: .warning,
-                    detail: String(format: "%.0f MB RAM đang ở trạng thái Inactive (không dùng nhưng chưa xoá). Đây là dữ liệu cũ của app đã đóng, iOS giữ lại phòng khi cần.", inactiveMB),
-                    canAutoFix: true, fixAction: "Ép Memory Pressure để iOS thu hồi Inactive Memory"))
+                    detail: String(format: "%.0f MB (%.0f%% tổng RAM) đang Inactive. iOS đang giữ quá nhiều cache cũ → Giảm RAM cho app mới.", inactiveMB, inactivePercent),
+                    canAutoFix: true, fixAction: "Ép Memory Pressure thu hồi Inactive Memory"))
                 score -= 5
             } else {
-                items.append(DiagnosticItem(name: "Inactive Memory ổn", icon: "moon.zzz", status: .good,
-                    detail: String(format: "Inactive: %.0f MB. Bình thường.", inactiveMB),
+                items.append(DiagnosticItem(name: "Inactive Memory bình thường", icon: "moon.zzz", status: .good,
+                    detail: String(format: "Inactive: %.0f MB (%.0f%%). Mức bình thường, iOS đang quản lý cache hiệu quả.", inactiveMB, inactivePercent),
                     canAutoFix: false, fixAction: ""))
             }
             
@@ -284,45 +286,97 @@ class DiagnosticManager: ObservableObject {
         isFixingAll = true
         showComparison = false
         beforeScore = healthScore
-        fixProgress = "Đang đo RAM trước khi sửa..."
+        fixLog = []
+        fixProgress = "Đang thu thập dữ liệu trước khi sửa..."
         
         DispatchQueue.global(qos: .userInitiated).async {
             let ramBefore = Double(os_proc_available_memory()) / (1024*1024)
+            let inactiveBefore = self.getInactiveMB()
             
             let fixable = self.results.filter { $0.canAutoFix && $0.status != .good }
-            let needsRAMFix = fixable.contains { $0.name.contains("RAM") || $0.name.contains("CPU") || $0.name.contains("nén") || $0.name.contains("bóp") }
+            var log: [String] = []
+            log.append("═══ NHẬT KÝ SỬA LỖI ═══")
+            log.append("Thời gian: \(self.currentTimeString())")
+            log.append("Số lỗi cần sửa: \(fixable.count)")
+            log.append("")
+            
+            let needsRAMFix = fixable.contains { $0.name.contains("RAM") || $0.name.contains("CPU") || $0.name.contains("nén") || $0.name.contains("bóp") || $0.name.contains("Inactive") }
             let needsNetFix = fixable.contains { $0.name.contains("Mạng") || $0.name.contains("mạng") }
-            let needsDiskFix = fixable.contains { $0.name.contains("cứng") }
+            let needsDiskFix = fixable.contains { $0.name.contains("cứng") || $0.name.contains("SSD") }
             
             if needsRAMFix {
-                DispatchQueue.main.async { self.fixProgress = "Đang ép iOS tắt app ngầm (Memory Pressure)..." }
+                log.append("── [1] SỬA RAM ──")
+                log.append("Trước: RAM trống = \(String(format: "%.0f", ramBefore)) MB")
+                log.append("Trước: Inactive = \(String(format: "%.0f", inactiveBefore)) MB")
+                log.append("Hành động: Ép Memory Pressure 2 vòng (mmap + memset + munmap)")
+                
+                DispatchQueue.main.async { self.fixProgress = "[1/\(fixable.count)] Ép Memory Pressure vòng 1..." }
                 self.forceMemoryPressure()
+                
+                let ramAfterFix = Double(os_proc_available_memory()) / (1024*1024)
+                let inactiveAfterFix = self.getInactiveMB()
+                let freed = ramAfterFix - ramBefore
+                let inactiveFreed = inactiveBefore - inactiveAfterFix
+                
+                log.append("Sau: RAM trống = \(String(format: "%.0f", ramAfterFix)) MB")
+                log.append("Sau: Inactive = \(String(format: "%.0f", inactiveAfterFix)) MB")
+                
+                if freed > 10 {
+                    log.append("✅ Đã giải phóng \(String(format: "%.0f", freed)) MB RAM")
+                } else if freed > 0 {
+                    log.append("⚠️ Chỉ giải phóng được \(String(format: "%.0f", freed)) MB - Máy vốn đã sạch")
+                } else {
+                    log.append("ℹ️ RAM trống không tăng - iOS đã quản lý bộ nhớ tối ưu sẵn")
+                }
+                
+                if inactiveFreed > 50 {
+                    log.append("✅ Thu hồi \(String(format: "%.0f", inactiveFreed)) MB Inactive Memory")
+                } else {
+                    log.append("ℹ️ Inactive Memory không giảm nhiều - iOS cố tình giữ cache để mở app nhanh hơn. Đây là hành vi BÌNH THƯỜNG, không phải lỗi.")
+                }
+                log.append("")
             }
             
             if needsNetFix {
-                DispatchQueue.main.async { self.fixProgress = "Đang xoá DNS Cache + Cookie rác..." }
+                log.append("── [2] SỬA MẠNG ──")
+                let cookieCount = HTTPCookieStorage.shared.cookies?.count ?? 0
+                let cacheSizeMB = Double(URLCache.shared.currentDiskUsage) / (1024*1024)
+                log.append("Trước: \(cookieCount) cookies, Cache: \(String(format: "%.1f", cacheSizeMB)) MB")
+                
+                DispatchQueue.main.async { self.fixProgress = "Xoá DNS Cache + Cookies..." }
                 self.clearNetworkCaches()
                 Thread.sleep(forTimeInterval: 0.5)
+                
+                let cookieAfter = HTTPCookieStorage.shared.cookies?.count ?? 0
+                let cacheAfter = Double(URLCache.shared.currentDiskUsage) / (1024*1024)
+                log.append("Sau: \(cookieAfter) cookies, Cache: \(String(format: "%.1f", cacheAfter)) MB")
+                log.append("✅ Đã xoá \(cookieCount - cookieAfter) cookies + \(String(format: "%.1f", cacheSizeMB - cacheAfter)) MB cache")
+                log.append("")
             }
             
             if needsDiskFix {
-                DispatchQueue.main.async { self.fixProgress = "Đang xoá file tạm + Cache..." }
+                log.append("── [3] SỬA Ổ CỨNG ──")
+                let tmpBefore = self.getDirSizeMB(NSTemporaryDirectory())
+                
+                DispatchQueue.main.async { self.fixProgress = "Xoá file tạm + Cache ổ cứng..." }
                 self.clearDiskCaches()
                 Thread.sleep(forTimeInterval: 0.5)
+                
+                let tmpAfter = self.getDirSizeMB(NSTemporaryDirectory())
+                log.append("Trước: tmp = \(String(format: "%.1f", tmpBefore)) MB")
+                log.append("Sau: tmp = \(String(format: "%.1f", tmpAfter)) MB")
+                log.append("✅ Đã xoá \(String(format: "%.1f", tmpBefore - tmpAfter)) MB file rác")
+                log.append("")
             }
             
-            let ramAfter = Double(os_proc_available_memory()) / (1024*1024)
-            let freedMB = ramAfter - ramBefore
+            log.append("═══ KẾT THÚC ═══")
             
             DispatchQueue.main.async {
-                if freedMB > 10 {
-                    self.fixProgress = String(format: "Sửa xong! Giải phóng được %.0f MB RAM. Đang quét lại...", freedMB)
-                } else {
-                    self.fixProgress = "Sửa xong! Máy đã sạch, không có app ngầm rác. Đang quét lại..."
-                }
+                self.fixLog = log
                 self.showComparison = true
                 self.isFixingAll = false
-                DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                self.fixProgress = "Sửa xong! Xem nhật ký bên dưới. Đang quét lại..."
+                DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
                     self.runFullDiagnostic(monitor: monitor)
                 }
             }
@@ -340,6 +394,37 @@ class DiagnosticManager: ObservableObject {
             }
         }
         return Int64(vmStat.decompressions)
+    }
+    
+    private func getInactiveMB() -> Double {
+        var vmStat = vm_statistics64()
+        var count = mach_msg_type_number_t(MemoryLayout<vm_statistics64>.size / MemoryLayout<integer_t>.size)
+        _ = withUnsafeMutablePointer(to: &vmStat) {
+            $0.withMemoryRebound(to: integer_t.self, capacity: Int(count)) {
+                host_statistics64(mach_host_self(), HOST_VM_INFO64, $0, &count)
+            }
+        }
+        var ps: vm_size_t = 0
+        host_page_size(mach_host_self(), &ps)
+        return Double(vmStat.inactive_count) * Double(ps) / (1024*1024)
+    }
+    
+    private func getDirSizeMB(_ path: String) -> Double {
+        var total: UInt64 = 0
+        let fm = FileManager.default
+        if let en = fm.enumerator(atPath: path) {
+            while let f = en.nextObject() as? String {
+                let fp = (path as NSString).appendingPathComponent(f)
+                if let a = try? fm.attributesOfItem(atPath: fp), let s = a[.size] as? UInt64 { total += s }
+            }
+        }
+        return Double(total) / (1024*1024)
+    }
+    
+    private func currentTimeString() -> String {
+        let f = DateFormatter()
+        f.dateFormat = "yyyy-MM-dd HH:mm:ss"
+        return f.string(from: Date())
     }
     
     private func forceMemoryPressure() {

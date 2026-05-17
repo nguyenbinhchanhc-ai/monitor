@@ -1,82 +1,202 @@
 import Foundation
 import Combine
 import os
+import UIKit
 
 class CleanerManager: ObservableObject {
     @Published var isCleaningRAM: Bool = false
     @Published var cleanedAmountMB: Double = 0.0
     @Published var message: String = ""
+    @Published var log: [String] = []
     
-    func cleanRAM(monitor: SystemMonitorManager) {
+    // Dọn tự động
+    @Published var autoCleanEnabled: Bool = false
+    @Published var autoCleanThresholdMB: Double = 300 // Khi RAM trống dưới 300MB thì tự dọn
+    @Published var autoCleanCount: Int = 0
+    private var autoCleanTimer: Timer?
+    
+    // Chế độ dọn
+    enum CleanMode: String, CaseIterable {
+        case light = "Nhẹ (1 vòng)"
+        case normal = "Bình thường (2 vòng)"
+        case deep = "Chuyên sâu (3 vòng + Cache)"
+    }
+    
+    func cleanRAM(monitor: SystemMonitorManager, mode: CleanMode = .deep) {
         guard !isCleaningRAM else { return }
         isCleaningRAM = true
-        self.message = "Bắt đầu phân tích RAM..."
+        message = ""
+        log = []
+        cleanedAmountMB = 0
         
         DispatchQueue.global(qos: .userInitiated).async {
-            // Đo RAM trước khi dọn
-            let ramBefore = monitor.getRAMUsage().used
+            var logLines: [String] = []
+            logLines.append("═══ NHẬT KÝ DỌN RAM ═══")
+            logLines.append("Thời gian: \(self.timeStr())")
+            logLines.append("Chế độ: \(mode.rawValue)")
+            logLines.append("")
             
-            var pointers: [UnsafeMutableRawPointer] = []
-            let chunkSize = 50 * 1024 * 1024 // Cục 50MB
-            var allocatedMB = 0
+            // Đo trước
+            let ramBefore = Double(os_proc_available_memory()) / (1024*1024)
+            let ramUsed = monitor.getRAMUsage()
+            logLines.append("── TRƯỚC KHI DỌN ──")
+            logLines.append("RAM trống: \(String(format: "%.0f", ramBefore)) MB")
+            logLines.append("RAM đã dùng: \(String(format: "%.0f / %.0f", ramUsed.used, ramUsed.total)) MB")
+            logLines.append("")
             
-            // Vòng lặp nhồi RAM cho đến khi iOS báo động
-            while true {
-                let available = os_proc_available_memory()
-                // Dừng lại khi app chỉ còn dưới 150MB được phép dùng để tránh tự sát (Crash)
-                if available < 150 * 1024 * 1024 {
-                    break
+            let passes: Int
+            switch mode {
+            case .light: passes = 1
+            case .normal: passes = 2
+            case .deep: passes = 3
+            }
+            
+            // Bước 1: Xoá Cache trước khi ép RAM (chỉ ở chế độ deep)
+            if mode == .deep {
+                DispatchQueue.main.async { self.message = "Xoá Cache hệ thống..." }
+                logLines.append("── XOÁ CACHE ──")
+                
+                let urlCacheBefore = Double(URLCache.shared.currentDiskUsage) / (1024*1024)
+                URLCache.shared.removeAllCachedResponses()
+                
+                if let cookies = HTTPCookieStorage.shared.cookies {
+                    let count = cookies.count
+                    for c in cookies { HTTPCookieStorage.shared.deleteCookie(c) }
+                    logLines.append("✅ Xoá \(count) cookies")
                 }
                 
-                // Dùng mmap để ép iOS cấp phát vùng nhớ vật lý (không dùng malloc vì malloc dễ bị ảo)
-                let ptr = mmap(nil, chunkSize, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0)
-                if ptr != MAP_FAILED, let validPtr = ptr {
-                    memset(validPtr, 0, chunkSize) // Ghi số 0 vào để ép RAM vật lý hoạt động
-                    pointers.append(validPtr)
-                    allocatedMB += 50
-                    
-                    DispatchQueue.main.async {
-                        self.message = "Đang ép hệ thống: Nuốt \(allocatedMB) MB..."
+                // Xoá tmp
+                let tmpDir = NSTemporaryDirectory()
+                var tmpCount = 0
+                if let files = try? FileManager.default.contentsOfDirectory(atPath: tmpDir) {
+                    for f in files {
+                        try? FileManager.default.removeItem(atPath: (tmpDir as NSString).appendingPathComponent(f))
+                        tmpCount += 1
                     }
-                } else {
-                    break
                 }
-                Thread.sleep(forTimeInterval: 0.05)
+                
+                // Xoá Caches dir
+                if let cachePath = NSSearchPathForDirectoriesInDomains(.cachesDirectory, .userDomainMask, true).first,
+                   let files = try? FileManager.default.contentsOfDirectory(atPath: cachePath) {
+                    for f in files {
+                        try? FileManager.default.removeItem(atPath: (cachePath as NSString).appendingPathComponent(f))
+                        tmpCount += 1
+                    }
+                }
+                
+                let urlCacheAfter = Double(URLCache.shared.currentDiskUsage) / (1024*1024)
+                logLines.append("✅ Xoá \(tmpCount) file tạm")
+                logLines.append("✅ Xoá \(String(format: "%.1f", urlCacheBefore - urlCacheAfter)) MB HTTP Cache")
+                logLines.append("")
+                
+                Thread.sleep(forTimeInterval: 0.5)
             }
             
-            DispatchQueue.main.async {
-                self.message = "Đang ép iOS chém app ngầm..."
+            // Bước 2: Memory Pressure nhiều vòng
+            logLines.append("── ÉP MEMORY PRESSURE ──")
+            
+            for pass in 1...passes {
+                DispatchQueue.main.async {
+                    self.message = "Vòng \(pass)/\(passes): Ép iOS tắt app ngầm..."
+                }
+                logLines.append("Vòng \(pass): Bắt đầu phân bổ RAM...")
+                
+                let chunk = 50 * 1024 * 1024
+                var ptrs: [UnsafeMutableRawPointer] = []
+                var allocatedMB = 0
+                
+                // Ở chế độ deep, ép sâu hơn (còn 100MB thay vì 120MB)
+                let threshold = mode == .deep ? 100 * 1024 * 1024 : 120 * 1024 * 1024
+                
+                while true {
+                    let avail = os_proc_available_memory()
+                    if avail < threshold { break }
+                    let p = mmap(nil, chunk, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0)
+                    if p != MAP_FAILED, let v = p {
+                        memset(v, 0, chunk)
+                        ptrs.append(v)
+                        allocatedMB += 50
+                    } else { break }
+                    Thread.sleep(forTimeInterval: 0.01)
+                }
+                
+                logLines.append("Vòng \(pass): Đã nuốt \(allocatedMB) MB → Chờ iOS phản ứng...")
+                
+                // Chế độ deep chờ lâu hơn để iOS có thời gian giết nhiều app hơn
+                let waitTime: TimeInterval = mode == .deep ? 3.0 : 2.0
+                Thread.sleep(forTimeInterval: waitTime)
+                
+                // Giải phóng
+                for p in ptrs { munmap(p, chunk) }
+                ptrs.removeAll()
+                
+                let ramAfterPass = Double(os_proc_available_memory()) / (1024*1024)
+                logLines.append("Vòng \(pass): RAM trống = \(String(format: "%.0f", ramAfterPass)) MB")
+                
+                if pass < passes {
+                    Thread.sleep(forTimeInterval: 1.0)
+                }
             }
             
-            // Đợi 2 giây để iOS có thời gian phát hiện thiếu RAM và đi giết các app ngầm
-            Thread.sleep(forTimeInterval: 2.0)
+            logLines.append("")
             
-            DispatchQueue.main.async {
-                self.message = "Đang hoàn trả RAM cho hệ thống..."
-            }
-            
-            // Dọn dẹp mảng RAM rác bằng munmap để OS nhận lại ngay lập tức
-            for ptr in pointers {
-                munmap(ptr, chunkSize)
-            }
-            pointers.removeAll()
-            
-            // Đợi 1 giây để OS cập nhật lại thông số RAM
+            // Đo sau
             Thread.sleep(forTimeInterval: 1.0)
+            let ramAfter = Double(os_proc_available_memory()) / (1024*1024)
+            let freed = ramAfter - ramBefore
             
-            let ramAfter = monitor.getRAMUsage().used
-            let freed = ramBefore - ramAfter
+            logLines.append("── KẾT QUẢ ──")
+            logLines.append("RAM trống sau: \(String(format: "%.0f", ramAfter)) MB")
+            
+            if freed > 10 {
+                logLines.append("✅ Giải phóng: \(String(format: "%.0f", freed)) MB RAM")
+            } else if freed > 0 {
+                logLines.append("⚠️ Chỉ giải phóng \(String(format: "%.0f", freed)) MB - Máy vốn đã sạch")
+            } else {
+                logLines.append("ℹ️ RAM không tăng - iOS đã tối ưu sẵn, không có app ngầm rác")
+            }
+            
+            logLines.append("")
+            logLines.append("═══ HOÀN TẤT ═══")
             
             DispatchQueue.main.async {
                 self.isCleaningRAM = false
-                if freed > 10 { // Nếu dọn được hơn 10MB
-                    self.cleanedAmountMB = freed
-                    self.message = "Hoàn tất! Đã giải phóng \(String(format: "%.0f", freed)) MB RAM."
+                self.cleanedAmountMB = max(0, freed)
+                self.log = logLines
+                if freed > 10 {
+                    self.message = "Đã giải phóng \(String(format: "%.0f", freed)) MB RAM!"
                 } else {
-                    self.cleanedAmountMB = 0
-                    self.message = "Máy đã rất mượt, không có app ngầm rác nào để xoá!"
+                    self.message = "Máy đã sạch! iOS không tìm thấy app ngầm rác."
                 }
             }
         }
+    }
+    
+    // MARK: - Dọn RAM Tự Động
+    
+    func toggleAutoClean(monitor: SystemMonitorManager) {
+        autoCleanEnabled.toggle()
+        
+        if autoCleanEnabled {
+            // Kiểm tra mỗi 30 giây
+            autoCleanTimer = Timer.scheduledTimer(withTimeInterval: 30.0, repeats: true) { [weak self] _ in
+                guard let self = self, self.autoCleanEnabled, !self.isCleaningRAM else { return }
+                
+                let availMB = Double(os_proc_available_memory()) / (1024*1024)
+                if availMB < self.autoCleanThresholdMB {
+                    self.autoCleanCount += 1
+                    self.cleanRAM(monitor: monitor, mode: .normal)
+                }
+            }
+        } else {
+            autoCleanTimer?.invalidate()
+            autoCleanTimer = nil
+        }
+    }
+    
+    private func timeStr() -> String {
+        let f = DateFormatter()
+        f.dateFormat = "HH:mm:ss"
+        return f.string(from: Date())
     }
 }

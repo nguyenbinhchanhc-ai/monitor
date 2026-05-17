@@ -15,6 +15,9 @@ struct DiagnosticView: View {
                 if diagnostic.isScanComplete && diagnostic.totalFixable > 0 {
                     fixButton
                 }
+                if !diagnostic.fixLog.isEmpty {
+                    fixLogSection
+                }
                 if diagnostic.isScanComplete {
                     resultsList
                 }
@@ -103,6 +106,30 @@ struct DiagnosticView: View {
             DiagnosticRowView(item: item)
                 .padding(.horizontal)
         }
+    }
+    
+    var fixLogSection: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("NHẬT KÝ SỬA LỖI").font(.subheadline).bold().foregroundColor(.cyan)
+            ForEach(diagnostic.fixLog, id: \.self) { line in
+                Text(line)
+                    .font(.system(.caption2, design: .monospaced))
+                    .foregroundColor(logColor(line))
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding()
+        .background(Color.black.opacity(0.8))
+        .cornerRadius(12)
+        .padding(.horizontal)
+    }
+    
+    func logColor(_ line: String) -> Color {
+        if line.contains("✅") { return .green }
+        if line.contains("⚠️") { return .orange }
+        if line.contains("ℹ️") { return .gray }
+        if line.contains("══") || line.contains("──") { return .cyan }
+        return .white
     }
     
     func statBadge(count: Int, label: String, color: Color) -> some View {
