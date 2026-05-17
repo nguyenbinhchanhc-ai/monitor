@@ -104,16 +104,18 @@ struct ContentView: View {
                             .font(.title3)
                             .bold()
                         
-                        if cleaner.cleanedAmountMB > 0 {
-                            Text("Đã kích hoạt dọn dẹp ~\(String(format: "%.0f", cleaner.cleanedAmountMB)) MB RAM rác")
+                        if !cleaner.message.isEmpty {
+                            Text(cleaner.message)
                                 .font(.footnote)
-                                .foregroundColor(.green)
+                                .foregroundColor(cleaner.cleanedAmountMB > 0 ? .green : .gray)
+                                .multilineTextAlignment(.center)
+                                .padding(.horizontal)
                         }
                         
                         Button(action: {
-                            cleaner.cleanRAM()
+                            cleaner.cleanRAM(monitor: monitor)
                         }) {
-                            Text(cleaner.isCleaningRAM ? "Đang tắt app ngầm..." : "Dọn Dẹp Ngay")
+                            Text(cleaner.isCleaningRAM ? "Đang xử lý..." : "Dọn Dẹp Ngay")
                                 .font(.headline)
                                 .frame(maxWidth: .infinity)
                                 .padding()
@@ -140,6 +142,15 @@ struct ContentView: View {
             .tabItem {
                 Image(systemName: "bolt.fill")
                 Text("Tối Ưu")
+            }
+            
+            // TAB 3: Khám Phá File
+            NavigationView {
+                FileExplorerView()
+            }
+            .tabItem {
+                Image(systemName: "folder.fill")
+                Text("File Hệ Thống")
             }
         }
     }
