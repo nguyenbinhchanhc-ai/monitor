@@ -26,6 +26,8 @@ class DiagnosticManager: ObservableObject {
     @Published var isFixingAll = false
     @Published var fixProgress: String = ""
     @Published var totalFixable: Int = 0
+    @Published var beforeScore: Int = 0
+    @Published var showComparison = false
     
     func runFullDiagnostic(monitor: SystemMonitorManager) {
         isScanning = true
@@ -37,201 +39,159 @@ class DiagnosticManager: ObservableObject {
             var items: [DiagnosticItem] = []
             var score = 100
             var step = 0.0
-            let total = 10.0
+            let total = 8.0
             
             func next(_ s: String) {
                 step += 1
                 DispatchQueue.main.async { self.currentScanStep = s; self.scanProgress = step / total }
-                Thread.sleep(forTimeInterval: 0.4)
+                Thread.sleep(forTimeInterval: 0.3)
             }
             
-            // 1. PAGE FAULTS (Lỗi trang bộ nhớ - dấu hiệu RAM bị ép quá tải)
-            next("Quét Page Faults (Lỗi trang bộ nhớ)...")
-            var vmStat = vm_statistics64()
-            var vmCount = mach_msg_type_number_t(MemoryLayout<vm_statistics64>.size / MemoryLayout<integer_t>.size)
-            withUnsafeMutablePointer(to: &vmStat) {
-                $0.withMemoryRebound(to: integer_t.self, capacity: Int(vmCount)) {
-                    host_statistics64(mach_host_self(), HOST_VM_INFO64, $0, &vmCount)
-                }
-            }
-            let pageFaults = vmStat.faults
-            let pageouts = vmStat.pageouts
-            let compressorPages = vmStat.compressor_page_count
-            let decompPages = vmStat.decompressions
+            // 1. RAM KHẢ DỤNG THỰC TẾ (Đo bằng os_proc_available_memory - chính xác nhất)
+            next("Đo RAM khả dụng thực tế...")
+            let availMB = Double(os_proc_available_memory()) / (1024*1024)
+            let ram = monitor.getRAMUsage()
+            let ramPercent = (ram.used / max(ram.total, 1)) * 100
             
-            if pageouts > 50000 {
-                items.append(DiagnosticItem(name: "Pageout nghiêm trọng", icon: "exclamationmark.triangle.fill", status: .critical,
-                    detail: "Kernel đã phải đẩy \(pageouts) trang bộ nhớ ra khỏi RAM (Pageout). Đây là dấu hiệu RAM bị quá tải nghiêm trọng ở cấp Kernel, gây micro-freeze và giật lag không rõ nguyên nhân.",
-                    canAutoFix: true, fixAction: "Ép Memory Pressure giải phóng RAM vật lý"))
-                score -= 20
-            } else {
-                items.append(DiagnosticItem(name: "Pageout bình thường", icon: "memorychip", status: .good,
-                    detail: "Pageout: \(pageouts). Kernel không bị ép đẩy RAM ra ngoài.", canAutoFix: false, fixAction: ""))
-            }
-            
-            // 2. MEMORY COMPRESSOR (Nén bộ nhớ - dấu hiệu iOS đang vật lộn giữ RAM)
-            next("Kiểm tra Memory Compressor...")
-            var pagesize: vm_size_t = 0
-            host_page_size(mach_host_self(), &pagesize)
-            let compressedMB = Double(compressorPages) * Double(pagesize) / (1024*1024)
-            let decompMB = Double(decompPages) * Double(pagesize) / (1024*1024)
-            
-            if compressedMB > 1500 {
-                items.append(DiagnosticItem(name: "RAM nén quá nhiều", icon: "arrow.down.right.and.arrow.up.left", status: .critical,
-                    detail: String(format: "Kernel đang nén %.0f MB RAM. Khi vượt 1.5GB, CPU phải liên tục nén/giải nén → hao pin, nóng máy, giật khi chuyển app.", compressedMB),
-                    canAutoFix: true, fixAction: "Ép giải phóng RAM nén"))
-                score -= 15
-            } else if compressedMB > 800 {
-                items.append(DiagnosticItem(name: "RAM nén hơi cao", icon: "arrow.down.right.and.arrow.up.left", status: .warning,
-                    detail: String(format: "Kernel đang nén %.0f MB. Mức chấp nhận được nhưng CPU đang phải làm việc thêm.", compressedMB),
-                    canAutoFix: true, fixAction: "Giải phóng bộ nhớ nén"))
-                score -= 8
-            } else {
-                items.append(DiagnosticItem(name: "Memory Compressor ổn", icon: "arrow.down.right.and.arrow.up.left", status: .good,
-                    detail: String(format: "RAM nén: %.0f MB. Bình thường.", compressedMB), canAutoFix: false, fixAction: ""))
-            }
-            
-            // 3. FILE DESCRIPTOR (Bộ mô tả tệp - cạn kiệt sẽ crash app)
-            next("Kiểm tra File Descriptor Kernel...")
-            var maxFiles: Int32 = 0
-            var mfSize = MemoryLayout<Int32>.size
-            sysctlbyname("kern.maxfiles", &maxFiles, &mfSize, nil, 0)
-            var openFiles: Int32 = 0
-            sysctlbyname("kern.num_files", &openFiles, &mfSize, nil, 0)
-            let fdPercent = maxFiles > 0 ? (Double(openFiles) / Double(maxFiles)) * 100 : 0
-            
-            if fdPercent > 80 {
-                items.append(DiagnosticItem(name: "File Descriptor sắp cạn", icon: "doc.badge.ellipsis", status: .critical,
-                    detail: "Kernel đang mở \(openFiles)/\(maxFiles) file descriptor (%.0f%%). Khi cạn kiệt → App crash ngẫu nhiên, mạng bị đứt, không mở được file.",
-                    canAutoFix: true, fixAction: "Ép tắt app ngầm để thu hồi file descriptor"))
-                score -= 20
-            } else if fdPercent > 50 {
-                items.append(DiagnosticItem(name: "File Descriptor hơi cao", icon: "doc.badge.ellipsis", status: .warning,
-                    detail: "Đang dùng \(openFiles)/\(maxFiles) FD. Có app đang mở quá nhiều kết nối/file.",
-                    canAutoFix: true, fixAction: "Dọn RAM để thu hồi FD"))
-                score -= 5
-            } else {
-                items.append(DiagnosticItem(name: "File Descriptor tốt", icon: "doc.badge.ellipsis", status: .good,
-                    detail: "Đang dùng \(openFiles)/\(maxFiles) FD. Bình thường.", canAutoFix: false, fixAction: ""))
-            }
-            
-            // 4. CONTEXT SWITCHES (Chuyển ngữ cảnh CPU - cao = CPU bị tranh chấp)
-            next("Đo Context Switch Rate...")
-            var csInfo1 = host_cpu_load_info()
-            var csCount1 = mach_msg_type_number_t(MemoryLayout<host_cpu_load_info>.size / MemoryLayout<integer_t>.size)
-            withUnsafeMutablePointer(to: &csInfo1) {
-                $0.withMemoryRebound(to: integer_t.self, capacity: Int(csCount1)) {
-                    host_statistics(mach_host_self(), HOST_CPU_LOAD_INFO, $0, &csCount1)
-                }
-            }
-            let csTotal = Int64(csInfo1.cpu_ticks.0) + Int64(csInfo1.cpu_ticks.1) + Int64(csInfo1.cpu_ticks.2) + Int64(csInfo1.cpu_ticks.3)
-            let csIdle = Int64(csInfo1.cpu_ticks.3)
-            let csBusy = csTotal > 0 ? Double(csTotal - csIdle) / Double(csTotal) * 100 : 0
-            
-            // 5. PROCESS COUNT
-            next("Đếm tiến trình đang chạy...")
-            var maxProc: Int32 = 0
-            var mpSize = MemoryLayout<Int32>.size
-            sysctlbyname("kern.maxproc", &maxProc, &mpSize, nil, 0)
-            
-            if maxProc > 0 && csBusy > 70 {
-                items.append(DiagnosticItem(name: "CPU tranh chấp cao", icon: "cpu", status: .warning,
-                    detail: String(format: "CPU Busy: %.0f%%. Quá nhiều tiến trình đang tranh giành CPU → phản hồi chậm, cuộn trang bị giật.", csBusy),
-                    canAutoFix: true, fixAction: "Ép tắt tiến trình ngầm"))
+            if availMB < 200 {
+                items.append(DiagnosticItem(name: "RAM khả dụng CỰC THẤP", icon: "memorychip", status: .critical,
+                    detail: String(format: "Chỉ còn %.0f MB RAM trống cho ứng dụng. Máy sẽ tự tắt app bất cứ lúc nào, gây mất dữ liệu và giật lag nghiêm trọng.", availMB),
+                    canAutoFix: true, fixAction: "Ép iOS tắt app ngầm để giải phóng RAM"))
+                score -= 25
+            } else if availMB < 500 {
+                items.append(DiagnosticItem(name: "RAM khả dụng thấp", icon: "memorychip", status: .warning,
+                    detail: String(format: "Còn %.0f MB RAM trống (Đã dùng %.0f%%). App ngầm đang chiếm nhiều bộ nhớ.", availMB, ramPercent),
+                    canAutoFix: true, fixAction: "Giải phóng RAM ngầm"))
                 score -= 10
             } else {
-                items.append(DiagnosticItem(name: "CPU không bị tranh chấp", icon: "cpu", status: .good,
-                    detail: String(format: "CPU Busy: %.0f%%. Các tiến trình không xung đột.", csBusy), canAutoFix: false, fixAction: ""))
+                items.append(DiagnosticItem(name: "RAM dồi dào", icon: "memorychip", status: .good,
+                    detail: String(format: "Còn %.0f MB RAM trống. Hệ thống hoạt động thoải mái.", availMB),
+                    canAutoFix: false, fixAction: ""))
             }
             
-            // 6. SPECULATIVE PAGES (Trang dự đoán - iOS dự đoán sai gây lãng phí RAM)
-            next("Phân tích Speculative Pages...")
-            let specPages = vmStat.speculative_count
-            let specMB = Double(specPages) * Double(pagesize) / (1024*1024)
+            // 2. TỐC ĐỘ NÉN RAM (Đo RATE trong 2 giây - không dùng tổng tích lũy)
+            next("Đo tốc độ nén RAM theo thời gian thực...")
+            let compBefore = self.getCompressorCount()
+            Thread.sleep(forTimeInterval: 2.0)
+            let compAfter = self.getCompressorCount()
+            let compRate = compAfter - compBefore // Số trang bị nén trong 2 giây
             
-            if specMB > 500 {
-                items.append(DiagnosticItem(name: "RAM dự đoán sai lãng phí", icon: "questionmark.diamond", status: .warning,
-                    detail: String(format: "Kernel đang giữ %.0f MB RAM \"dự đoán\" (Speculative). Đây là RAM mà iOS đoán bạn sẽ dùng nhưng thực tế không cần → Lãng phí.", specMB),
-                    canAutoFix: true, fixAction: "Ép thu hồi RAM speculative"))
-                score -= 5
-            } else {
-                items.append(DiagnosticItem(name: "Speculative Pages ổn", icon: "questionmark.diamond", status: .good,
-                    detail: String(format: "RAM dự đoán: %.0f MB. Bình thường.", specMB), canAutoFix: false, fixAction: ""))
-            }
-            
-            // 7. PURGEABLE MEMORY (RAM có thể thu hồi mà iOS chưa chịu dọn)
-            next("Kiểm tra Purgeable Memory...")
-            let purgePages = vmStat.purgeable_count
-            let purgeMB = Double(purgePages) * Double(pagesize) / (1024*1024)
-            
-            if purgeMB > 300 {
-                items.append(DiagnosticItem(name: "RAM rác chưa được thu hồi", icon: "trash.circle", status: .warning,
-                    detail: String(format: "iOS đang giữ %.0f MB RAM \"có thể xoá\" (Purgeable) nhưng chưa chịu xoá. Đây là bộ nhớ đệm cũ của các app đã đóng.", purgeMB),
-                    canAutoFix: true, fixAction: "Ép iOS thu hồi Purgeable Memory"))
+            if compRate > 5000 {
+                items.append(DiagnosticItem(name: "CPU đang nén RAM liên tục", icon: "arrow.down.right.and.arrow.up.left", status: .critical,
+                    detail: "Phát hiện \(compRate) trang RAM bị nén trong 2 giây vừa qua. CPU đang phải làm việc thêm để nén/giải nén bộ nhớ → Hao pin, nóng máy, giật khi chuyển app.",
+                    canAutoFix: true, fixAction: "Ép giải phóng RAM để dừng chu kỳ nén"))
+                score -= 20
+            } else if compRate > 1000 {
+                items.append(DiagnosticItem(name: "RAM đang bị nén nhẹ", icon: "arrow.down.right.and.arrow.up.left", status: .warning,
+                    detail: "Phát hiện \(compRate) trang nén trong 2s. CPU đang phải nén bộ nhớ.",
+                    canAutoFix: true, fixAction: "Giải phóng RAM"))
                 score -= 8
             } else {
-                items.append(DiagnosticItem(name: "Purgeable Memory sạch", icon: "trash.circle", status: .good,
-                    detail: String(format: "Purgeable: %.0f MB. iOS đã dọn tốt.", purgeMB), canAutoFix: false, fixAction: ""))
+                items.append(DiagnosticItem(name: "Không có nén RAM bất thường", icon: "arrow.down.right.and.arrow.up.left", status: .good,
+                    detail: "Tốc độ nén: \(compRate) trang/2s. CPU không bị quá tải nén bộ nhớ.",
+                    canAutoFix: false, fixAction: ""))
             }
             
-            // 8. THERMAL STATE
-            next("Đo Thermal Throttling...")
+            // 3. CPU THỜI GIAN THỰC (Dùng hàm getCPUUsage có sẵn - đã đo delta)
+            next("Đo tải CPU thời gian thực...")
+            let cpu = monitor.getCPUUsage()
+            
+            if cpu > 80 {
+                items.append(DiagnosticItem(name: "CPU quá tải", icon: "cpu", status: .critical,
+                    detail: String(format: "CPU đang chạy %.0f%% ngay lúc này. Có tiến trình ngầm đang ngốn CPU → Hao pin, nóng máy.", cpu),
+                    canAutoFix: true, fixAction: "Ép tắt tiến trình ngầm"))
+                score -= 20
+            } else if cpu > 50 {
+                items.append(DiagnosticItem(name: "CPU hơi cao", icon: "cpu", status: .warning,
+                    detail: String(format: "CPU %.0f%%. Mức trung bình.", cpu),
+                    canAutoFix: false, fixAction: ""))
+                score -= 5
+            } else {
+                items.append(DiagnosticItem(name: "CPU nhẹ nhàng", icon: "cpu", status: .good,
+                    detail: String(format: "CPU %.0f%%.", cpu), canAutoFix: false, fixAction: ""))
+            }
+            
+            // 4. THERMAL THROTTLING
+            next("Kiểm tra bóp hiệu năng CPU...")
             let thermal = ProcessInfo.processInfo.thermalState
             if thermal == .critical || thermal == .serious {
-                items.append(DiagnosticItem(name: "CPU bị bóp hiệu năng (Throttle)", icon: "flame.fill",
+                items.append(DiagnosticItem(name: "CPU bị Apple bóp hiệu năng", icon: "flame.fill",
                     status: thermal == .critical ? .critical : .warning,
-                    detail: "Apple đã tự động giảm xung nhịp CPU để bảo vệ pin và phần cứng. Hiệu suất thực tế giảm 30-50%. Đây là lỗi ẩn gây lag mà người dùng thường không biết.",
-                    canAutoFix: true, fixAction: "Dọn RAM để giảm tải CPU → Hạ nhiệt"))
+                    detail: "Apple đã tự động giảm xung nhịp CPU để hạ nhiệt. Hiệu suất thực tế giảm 30-50%.",
+                    canAutoFix: true, fixAction: "Dọn RAM để giảm tải → Hạ nhiệt CPU"))
                 score -= (thermal == .critical ? 25 : 12)
             } else {
-                items.append(DiagnosticItem(name: "CPU không bị Throttle", icon: "thermometer.low", status: .good,
-                    detail: "CPU đang chạy ở hiệu năng tối đa, không bị Apple bóp.", canAutoFix: false, fixAction: ""))
+                items.append(DiagnosticItem(name: "CPU không bị bóp", icon: "thermometer.low", status: .good,
+                    detail: "CPU đang chạy hiệu năng tối đa.", canAutoFix: false, fixAction: ""))
             }
             
-            // 9. DNS + NETWORK LATENCY
-            next("Đo độ trễ mạng sâu...")
+            // 5. MẠNG
+            next("Đo tốc độ phản hồi mạng...")
             let latency = self.measureLatency()
             if latency < 0 {
-                items.append(DiagnosticItem(name: "DNS/Mạng bị lỗi", icon: "wifi.exclamationmark", status: .critical,
-                    detail: "Không thể phân giải DNS hoặc mạng bị chặn. Gây lỗi: App không tải được dữ liệu, iMessage/FaceTime báo lỗi kết nối.",
-                    canAutoFix: true, fixAction: "Xoá DNS Cache + Cookie + Reset HTTP Session"))
+                items.append(DiagnosticItem(name: "Mạng bị lỗi", icon: "wifi.exclamationmark", status: .critical,
+                    detail: "Không thể kết nối Internet. DNS lỗi hoặc mạng bị chặn.",
+                    canAutoFix: true, fixAction: "Xoá DNS Cache + Cookie"))
                 score -= 15
             } else if latency > 500 {
-                items.append(DiagnosticItem(name: "Độ trễ mạng cao", icon: "wifi.exclamationmark", status: .warning,
-                    detail: String(format: "Ping: %.0f ms. Trên 500ms gây giật video, FaceTime bị đứt, game online lag.", latency),
-                    canAutoFix: true, fixAction: "Xoá Cache mạng + Cookie rác"))
+                items.append(DiagnosticItem(name: "Mạng chậm", icon: "wifi.exclamationmark", status: .warning,
+                    detail: String(format: "Ping: %.0f ms. Gây giật video, game online lag.", latency),
+                    canAutoFix: true, fixAction: "Xoá Cache mạng"))
                 score -= 8
             } else {
                 items.append(DiagnosticItem(name: "Mạng ổn định", icon: "wifi", status: .good,
                     detail: String(format: "Ping: %.0f ms.", latency), canAutoFix: false, fixAction: ""))
             }
             
-            // 10. UPTIME
-            next("Phân tích Uptime Kernel...")
+            // 6. Ổ CỨNG
+            next("Kiểm tra ổ cứng...")
+            let disk = monitor.getDiskSpace()
+            let freeGB = disk.total - disk.used
+            if freeGB < 3 {
+                items.append(DiagnosticItem(name: "Ổ cứng sắp đầy", icon: "internaldrive", status: .critical,
+                    detail: String(format: "Chỉ còn %.1f GB trống!", freeGB),
+                    canAutoFix: true, fixAction: "Xoá Cache + File tạm"))
+                score -= 20
+            } else {
+                items.append(DiagnosticItem(name: "Ổ cứng thoải mái", icon: "internaldrive", status: .good,
+                    detail: String(format: "Còn %.1f GB trống.", freeGB), canAutoFix: false, fixAction: ""))
+            }
+            
+            // 7. UPTIME
+            next("Kiểm tra thời gian hoạt động...")
             var bt = timeval()
             var btSz = MemoryLayout<timeval>.size
             var mib: [Int32] = [CTL_KERN, KERN_BOOTTIME]
             sysctl(&mib, 2, &bt, &btSz, nil, 0)
             let days = (Date().timeIntervalSince1970 - Double(bt.tv_sec)) / 86400
-            
-            if days > 14 {
-                items.append(DiagnosticItem(name: "Kernel Cache phình to", icon: "arrow.clockwise", status: .critical,
-                    detail: String(format: "Máy chạy %.0f ngày không restart. Bộ nhớ đệm Kernel (kext cache, IOKit registry, launchd) tích tụ rất lớn → Gây lỗi Touch ID/Face ID, Bluetooth đứt kết nối, WiFi tự ngắt.", days),
-                    canAutoFix: false, fixAction: "Khởi động lại máy để xoá Kernel Cache"))
-                score -= 15
-            } else if days > 7 {
-                items.append(DiagnosticItem(name: "Nên restart máy", icon: "arrow.clockwise", status: .warning,
-                    detail: String(format: "Máy chạy %.0f ngày. Kernel cache đang phình to dần.", days),
-                    canAutoFix: false, fixAction: "Restart máy"))
-                score -= 5
+            if days > 7 {
+                items.append(DiagnosticItem(name: "Máy lâu chưa restart", icon: "arrow.clockwise",
+                    status: days > 14 ? .critical : .warning,
+                    detail: String(format: "Máy chạy %.0f ngày. Kernel cache phình to → Lỗi Bluetooth, WiFi tự ngắt, Face ID chậm.", days),
+                    canAutoFix: false, fixAction: "Hãy khởi động lại máy"))
+                score -= (days > 14 ? 15 : 8)
             } else {
                 items.append(DiagnosticItem(name: "Uptime tốt", icon: "arrow.clockwise", status: .good,
-                    detail: String(format: "Uptime: %.1f ngày. Kernel cache sạch.", days), canAutoFix: false, fixAction: ""))
+                    detail: String(format: "Chạy %.1f ngày.", days), canAutoFix: false, fixAction: ""))
+            }
+            
+            // 8. PIN
+            next("Kiểm tra pin...")
+            let bat = UIDevice.current.batteryLevel
+            if bat >= 0 && bat < 0.1 {
+                items.append(DiagnosticItem(name: "Pin cực thấp", icon: "battery.0percent", status: .critical,
+                    detail: String(format: "Pin %.0f%%! Nguy cơ mất dữ liệu.", bat*100),
+                    canAutoFix: false, fixAction: "Cắm sạc ngay"))
+                score -= 10
+            } else {
+                items.append(DiagnosticItem(name: "Pin ổn", icon: "battery.75percent", status: .good,
+                    detail: bat >= 0 ? String(format: "Pin %.0f%%.", bat*100) : "Đang sạc.",
+                    canAutoFix: false, fixAction: ""))
             }
             
             DispatchQueue.main.async {
                 self.scanProgress = 1.0
-                self.currentScanStep = "Hoàn tất quét \(items.count) lỗi Kernel!"
+                self.currentScanStep = "Hoàn tất!"
                 self.results = items
                 self.healthScore = max(0, min(score, 100))
                 self.totalFixable = items.filter { $0.canAutoFix && $0.status != .good }.count
@@ -243,31 +203,64 @@ class DiagnosticManager: ObservableObject {
     
     func autoFixAll(monitor: SystemMonitorManager) {
         isFixingAll = true
-        fixProgress = "Đang sửa lỗi Kernel..."
+        showComparison = false
+        beforeScore = healthScore
+        fixProgress = "Đang đo RAM trước khi sửa..."
         
         DispatchQueue.global(qos: .userInitiated).async {
-            let fixable = self.results.filter { $0.canAutoFix && $0.status != .good }
+            let ramBefore = Double(os_proc_available_memory()) / (1024*1024)
             
-            for (i, item) in fixable.enumerated() {
-                DispatchQueue.main.async { self.fixProgress = "[\(i+1)/\(fixable.count)] \(item.fixAction)..." }
-                
-                if item.name.contains("RAM") || item.name.contains("CPU") || item.name.contains("Page") ||
-                   item.name.contains("Speculative") || item.name.contains("Purgeable") || item.name.contains("Throttle") ||
-                   item.name.contains("File Descriptor") || item.name.contains("tranh chấp") {
-                    self.forceMemoryPressure()
-                }
-                if item.name.contains("DNS") || item.name.contains("mạng") || item.name.contains("Mạng") {
-                    self.clearNetworkCaches()
-                }
+            let fixable = self.results.filter { $0.canAutoFix && $0.status != .good }
+            let needsRAMFix = fixable.contains { $0.name.contains("RAM") || $0.name.contains("CPU") || $0.name.contains("nén") || $0.name.contains("bóp") }
+            let needsNetFix = fixable.contains { $0.name.contains("Mạng") || $0.name.contains("mạng") }
+            let needsDiskFix = fixable.contains { $0.name.contains("cứng") }
+            
+            if needsRAMFix {
+                DispatchQueue.main.async { self.fixProgress = "Đang ép iOS tắt app ngầm (Memory Pressure)..." }
+                self.forceMemoryPressure()
+            }
+            
+            if needsNetFix {
+                DispatchQueue.main.async { self.fixProgress = "Đang xoá DNS Cache + Cookie rác..." }
+                self.clearNetworkCaches()
                 Thread.sleep(forTimeInterval: 0.5)
             }
             
+            if needsDiskFix {
+                DispatchQueue.main.async { self.fixProgress = "Đang xoá file tạm + Cache..." }
+                self.clearDiskCaches()
+                Thread.sleep(forTimeInterval: 0.5)
+            }
+            
+            let ramAfter = Double(os_proc_available_memory()) / (1024*1024)
+            let freedMB = ramAfter - ramBefore
+            
             DispatchQueue.main.async {
-                self.fixProgress = "Sửa xong! Đang quét lại..."
+                if freedMB > 10 {
+                    self.fixProgress = String(format: "Sửa xong! Giải phóng được %.0f MB RAM. Đang quét lại...", freedMB)
+                } else {
+                    self.fixProgress = "Sửa xong! Máy đã sạch, không có app ngầm rác. Đang quét lại..."
+                }
+                self.showComparison = true
                 self.isFixingAll = false
-                DispatchQueue.main.asyncAfter(deadline: .now() + 1) { self.runFullDiagnostic(monitor: monitor) }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                    self.runFullDiagnostic(monitor: monitor)
+                }
             }
         }
+    }
+    
+    // MARK: - Helpers
+    
+    private func getCompressorCount() -> Int64 {
+        var vmStat = vm_statistics64()
+        var count = mach_msg_type_number_t(MemoryLayout<vm_statistics64>.size / MemoryLayout<integer_t>.size)
+        _ = withUnsafeMutablePointer(to: &vmStat) {
+            $0.withMemoryRebound(to: integer_t.self, capacity: Int(count)) {
+                host_statistics64(mach_host_self(), HOST_VM_INFO64, $0, &count)
+            }
+        }
+        return Int64(vmStat.decompressions)
     }
     
     private func forceMemoryPressure() {
@@ -281,12 +274,25 @@ class DiagnosticManager: ObservableObject {
         }
         Thread.sleep(forTimeInterval: 2.0)
         for p in ptrs { munmap(p, chunk) }
-        Thread.sleep(forTimeInterval: 0.5)
+        Thread.sleep(forTimeInterval: 1.0)
     }
     
     private func clearNetworkCaches() {
         URLCache.shared.removeAllCachedResponses()
-        if let cookies = HTTPCookieStorage.shared.cookies { for c in cookies { HTTPCookieStorage.shared.deleteCookie(c) } }
+        if let cookies = HTTPCookieStorage.shared.cookies {
+            for c in cookies { HTTPCookieStorage.shared.deleteCookie(c) }
+        }
+    }
+    
+    private func clearDiskCaches() {
+        let tmpDir = NSTemporaryDirectory()
+        if let files = try? FileManager.default.contentsOfDirectory(atPath: tmpDir) {
+            for f in files { try? FileManager.default.removeItem(atPath: (tmpDir as NSString).appendingPathComponent(f)) }
+        }
+        if let cachePath = NSSearchPathForDirectoriesInDomains(.cachesDirectory, .userDomainMask, true).first,
+           let files = try? FileManager.default.contentsOfDirectory(atPath: cachePath) {
+            for f in files { try? FileManager.default.removeItem(atPath: (cachePath as NSString).appendingPathComponent(f)) }
+        }
     }
     
     private func measureLatency() -> Double {
