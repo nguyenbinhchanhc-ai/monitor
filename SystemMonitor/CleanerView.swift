@@ -153,7 +153,7 @@ struct CleanerView: View {
     
     var logSection: some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text("NHẬT KÝ DỌN DẸP").font(.subheadline).bold().foregroundColor(.cyan)
+            Text("NHẬT KÝ DỌN DẸP").font(.subheadline).bold().foregroundColor(Color(red: 0, green: 0.8, blue: 1))
             ForEach(cleaner.log, id: \.self) { line in
                 Text(line)
                     .font(.system(.caption2, design: .monospaced))
@@ -171,7 +171,7 @@ struct CleanerView: View {
         if line.contains("✅") { return .green }
         if line.contains("⚠️") { return .orange }
         if line.contains("ℹ️") { return .gray }
-        if line.contains("══") || line.contains("──") { return .cyan }
+        if line.contains("══") || line.contains("──") { return Color(red: 0, green: 0.8, blue: 1) }
         return .white
     }
 }
