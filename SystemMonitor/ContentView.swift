@@ -6,7 +6,41 @@ struct ContentView: View {
     var body: some View {
         NavigationView {
             List {
+                Section(header: Text("Chẩn Đoán Lỗi & Thông Số Cơ Bản")) {
+                    HStack {
+                        Text("Dòng máy")
+                        Spacer()
+                        Text(monitor.deviceModel).bold()
+                    }
+                    HStack {
+                        Text("Thời gian hoạt động")
+                        Spacer()
+                        Text(monitor.uptime).bold()
+                    }
+                    HStack {
+                        Text("Bộ nhớ trong (Disk)")
+                        Spacer()
+                        Text(String(format: "%.1f GB / %.1f GB", monitor.usedDisk, monitor.totalDisk))
+                            .bold()
+                    }
+                    ProgressView(value: max(0.0, min(monitor.usedDisk / max(monitor.totalDisk, 1), 1.0)))
+                        .accentColor(.blue)
+                    
+                    HStack {
+                        Text("Chế độ tiết kiệm pin")
+                        Spacer()
+                        Text(monitor.lowPowerMode ? "Đang bật" : "Tắt")
+                            .foregroundColor(monitor.lowPowerMode ? .orange : .green)
+                            .bold()
+                    }
+                }
+
                 Section(header: Text("Bộ Xử Lý (CPU)")) {
+                    HStack {
+                        Text("Xung nhịp (Clock Speed)")
+                        Spacer()
+                        Text("Apple đã ẩn").bold().foregroundColor(.gray)
+                    }
                     HStack {
                         Text("Mức độ sử dụng")
                         Spacer()
@@ -32,10 +66,15 @@ struct ContentView: View {
                 
                 Section(header: Text("Pin & Nhiệt Độ")) {
                     HStack {
-                        Text("Dung lượng Pin")
+                        Text("Mức sạc hiện tại")
                         Spacer()
                         Text(monitor.batteryLevel >= 0 ? String(format: "%.0f %%", monitor.batteryLevel * 100) : "Không rõ")
                             .bold()
+                    }
+                    HStack {
+                        Text("Độ chai pin (Battery Health)")
+                        Spacer()
+                        Text("Apple đã ẩn").bold().foregroundColor(.gray)
                     }
                     HStack {
                         Text("Trạng thái nhiệt")

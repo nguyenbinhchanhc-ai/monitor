@@ -9,6 +9,12 @@ class SystemMonitorManager: ObservableObject {
     @Published var batteryLevel: Float = 0.0
     @Published var thermalState: ProcessInfo.ThermalState = .nominal
     
+    @Published var deviceModel: String = ""
+    @Published var uptime: String = ""
+    @Published var usedDisk: Double = 0.0
+    @Published var totalDisk: Double = 0.0
+    @Published var lowPowerMode: Bool = false
+    
     private var timer: Timer?
     
     private var prevCpuInfo: processor_info_array_t?
@@ -37,6 +43,48 @@ class SystemMonitorManager: ObservableObject {
         self.totalRAM = ram.total
         self.batteryLevel = UIDevice.current.batteryLevel
         self.thermalState = ProcessInfo.processInfo.thermalState
+        
+        self.deviceModel = getDeviceModel()
+        self.uptime = getUptime()
+        let disk = getDiskSpace()
+        self.usedDisk = disk.used
+        self.totalDisk = disk.total
+        self.lowPowerMode = ProcessInfo.processInfo.isLowPowerModeEnabled
+    }
+    
+    func getDeviceModel() -> String {
+        var size: Int = 0
+        sysctlbyname("hw.machine", nil, &size, nil, 0)
+        var machine = [CChar](repeating: 0, count: size)
+        sysctlbyname("hw.machine", &machine, &size, nil, 0)
+        return String(cString: machine)
+    }
+    
+    func getUptime() -> String {
+        var boottime = timeval()
+        var size = MemoryLayout<timeval>.size
+        var mib: [Int32] = [CTL_KERN, KERN_BOOTTIME]
+        sysctl(&mib, 2, &boottime, &size, nil, 0)
+        
+        let uptime = Date().timeIntervalSince1970 - Double(boottime.tv_sec)
+        let days = Int(uptime) / 86400
+        let hours = (Int(uptime) % 86400) / 3600
+        let minutes = (Int(uptime) % 3600) / 60
+        return "\(days) ngày \(hours) giờ \(minutes) phút"
+    }
+    
+    func getDiskSpace() -> (used: Double, total: Double) {
+        do {
+            let attrs = try FileManager.default.attributesOfItem(atPath: NSHomeDirectory())
+            let systemAttrs = try FileManager.default.attributesOfFileSystem(forPath: NSHomeDirectory())
+            let total = systemAttrs[.systemSize] as? NSNumber
+            let free = systemAttrs[.systemFreeSize] as? NSNumber
+            
+            if let t = total?.doubleValue, let f = free?.doubleValue {
+                return (used: (t - f) / (1024 * 1024 * 1024), total: t / (1024 * 1024 * 1024))
+            }
+        } catch {}
+        return (0, 0)
     }
     
     func getCPUUsage() -> Double {
