@@ -37,9 +37,13 @@ struct ContentView: View {
 
                 Section(header: Text("Bộ Xử Lý (CPU)")) {
                     HStack {
-                        Text("Xung nhịp (Clock Speed)")
+                        Text("Xung nhịp tối đa")
                         Spacer()
-                        Text("Apple đã ẩn").bold().foregroundColor(.gray)
+                        if monitor.cpuFrequency > 0 {
+                            Text("\(monitor.cpuFrequency / 1000000) MHz").bold()
+                        } else {
+                            Text("Bị Apple chặn").bold().foregroundColor(.red)
+                        }
                     }
                     HStack {
                         Text("Mức độ sử dụng")
@@ -74,7 +78,20 @@ struct ContentView: View {
                     HStack {
                         Text("Độ chai pin (Battery Health)")
                         Spacer()
-                        Text("Apple đã ẩn").bold().foregroundColor(.gray)
+                        if monitor.batteryHealth > 0 {
+                            Text(String(format: "%.1f %%", monitor.batteryHealth)).bold()
+                        } else {
+                            Text("Bị Apple chặn").bold().foregroundColor(.red)
+                        }
+                    }
+                    HStack {
+                        Text("Chu kỳ sạc (Cycle Count)")
+                        Spacer()
+                        if monitor.batteryCycles >= 0 {
+                            Text("\(monitor.batteryCycles) lần").bold()
+                        } else {
+                            Text("Bị Apple chặn").bold().foregroundColor(.red)
+                        }
                     }
                     HStack {
                         Text("Trạng thái nhiệt")

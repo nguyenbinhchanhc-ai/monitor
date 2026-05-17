@@ -14,6 +14,10 @@ class SystemMonitorManager: ObservableObject {
     @Published var usedDisk: Double = 0.0
     @Published var totalDisk: Double = 0.0
     @Published var lowPowerMode: Bool = false
+    @Published var batteryHealth: Double = -1
+    @Published var batteryCycles: Int = -1
+    
+    @Published var cpuFrequency: Int = 0
     
     private var timer: Timer?
     
@@ -50,6 +54,15 @@ class SystemMonitorManager: ObservableObject {
         self.usedDisk = disk.used
         self.totalDisk = disk.total
         self.lowPowerMode = ProcessInfo.processInfo.isLowPowerModeEnabled
+        
+        let batIOKit = getBatteryHealth()
+        self.batteryHealth = batIOKit.health
+        self.batteryCycles = batIOKit.cycleCount
+        
+        var freq: Int = 0
+        var size = MemoryLayout<Int>.size
+        sysctlbyname("hw.cpufrequency_max", &freq, &size, nil, 0)
+        self.cpuFrequency = freq
     }
     
     func getDeviceModel() -> String {
@@ -85,6 +98,30 @@ class SystemMonitorManager: ObservableObject {
             }
         } catch {}
         return (0, 0)
+    }
+    
+    func getBatteryHealth() -> (health: Double, cycleCount: Int) {
+        let service = IOServiceGetMatchingService(0, IOServiceMatching("AppleSmartBattery"))
+        if service != 0 {
+            let maxCapRaw = IORegistryEntryCreateCFProperty(service, "AppleRawMaxCapacity" as CFString, nil, 0)
+            let designCapRaw = IORegistryEntryCreateCFProperty(service, "DesignCapacity" as CFString, nil, 0)
+            let cycleCountRaw = IORegistryEntryCreateCFProperty(service, "CycleCount" as CFString, nil, 0)
+            
+            var maxCap: Double = 0
+            var designCap: Double = 0
+            var cycles: Int = 0
+            
+            if let max = maxCapRaw as? NSNumber { maxCap = max.doubleValue }
+            if let design = designCapRaw as? NSNumber { designCap = design.doubleValue }
+            if let cycle = cycleCountRaw as? NSNumber { cycles = cycle.intValue }
+            
+            IOObjectRelease(service)
+            
+            if designCap > 0 {
+                return (health: (maxCap / designCap) * 100.0, cycleCount: cycles)
+            }
+        }
+        return (health: -1, cycleCount: -1)
     }
     
     func getCPUUsage() -> Double {
