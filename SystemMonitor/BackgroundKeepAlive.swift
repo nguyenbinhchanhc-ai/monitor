@@ -4,55 +4,78 @@ import CoreLocation
 class BackgroundKeepAlive: NSObject, ObservableObject, CLLocationManagerDelegate {
     static let shared = BackgroundKeepAlive()
     
-    private let locationManager = CLLocationManager()
+    private var locationManager: CLLocationManager?
     @Published var isBackgroundEnabled = false
     @Published var status: String = "Chưa kích hoạt"
     
     override init() {
         super.init()
-        locationManager.delegate = self
-        locationManager.allowsBackgroundLocationUpdates = true
-        locationManager.pausesLocationUpdatesAutomatically = false
-        locationManager.desiredAccuracy = kCLLocationAccuracyThreeKilometers // Tiết kiệm pin nhất
-        locationManager.distanceFilter = 99999 // Hầu như không bao giờ cập nhật vị trí thật
+        // KHÔNG tạo CLLocationManager trong init() - chờ user bật
     }
     
     func startBackground() {
-        locationManager.requestAlwaysAuthorization()
-        locationManager.startUpdatingLocation()
-        isBackgroundEnabled = true
-        status = "Đang chạy ngầm (Location)"
+        if locationManager == nil {
+            let mgr = CLLocationManager()
+            mgr.delegate = self
+            mgr.desiredAccuracy = kCLLocationAccuracyThreeKilometers
+            mgr.distanceFilter = 99999
+            mgr.pausesLocationUpdatesAutomatically = false
+            locationManager = mgr
+        }
+        
+        locationManager?.requestAlwaysAuthorization()
     }
     
     func stopBackground() {
-        locationManager.stopUpdatingLocation()
+        locationManager?.stopMonitoringSignificantLocationChanges()
+        locationManager?.stopUpdatingLocation()
         isBackgroundEnabled = false
         status = "Đã tắt chạy ngầm"
+    }
+    
+    private func beginTracking() {
+        guard let mgr = locationManager else { return }
+        
+        // Dùng significantLocationChanges - KHÔNG cần allowsBackgroundLocationUpdates
+        // Hoạt động tốt với sideload app, hao pin rất ít
+        mgr.startMonitoringSignificantLocationChanges()
+        isBackgroundEnabled = true
+        status = "Đang chạy ngầm (Significant Location) ✅"
     }
     
     // MARK: - CLLocationManagerDelegate
     
     func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
-        // Không làm gì cả - chỉ cần giữ app sống
+        // Không làm gì - chỉ giữ app sống
     }
     
-    func locationManager(_ manager: CLLocationManager, didChangeAuthorization status: CLAuthorizationStatus) {
-        switch status {
+    func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
+        let authStatus: CLAuthorizationStatus
+        if #available(iOS 14.0, *) {
+            authStatus = manager.authorizationStatus
+        } else {
+            authStatus = CLLocationManager.authorizationStatus()
+        }
+        
+        switch authStatus {
         case .authorizedAlways:
-            self.status = "Quyền: Luôn luôn ✅ - App sẽ chạy ngầm"
+            status = "Quyền: Luôn luôn ✅"
+            beginTracking()
         case .authorizedWhenInUse:
-            self.status = "Quyền: Khi dùng app ⚠️ - Hãy chọn 'Luôn luôn' trong Cài đặt"
+            status = "Quyền: Khi dùng app ⚠️ - Vào Cài đặt → chọn 'Luôn luôn'"
+            // Vẫn chạy được khi app foreground
+            beginTracking()
         case .denied, .restricted:
-            self.status = "Quyền: Bị từ chối ❌ - App sẽ bị iOS tắt khi chạy ngầm"
+            status = "Quyền: Bị từ chối ❌"
             isBackgroundEnabled = false
         case .notDetermined:
-            self.status = "Đang chờ cấp quyền..."
+            status = "Đang chờ cấp quyền..."
         @unknown default:
-            self.status = "Không xác định"
+            status = "Không xác định"
         }
     }
     
     func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
-        // Bỏ qua lỗi - app vẫn sống
+        // Bỏ qua - app vẫn sống
     }
 }
