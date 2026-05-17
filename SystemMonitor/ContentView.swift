@@ -144,7 +144,16 @@ struct ContentView: View {
                 Text("Tối Ưu")
             }
             
-            // TAB 3: Đặc Quyền
+            // TAB 3: Chẩn Đoán & Sửa Lỗi
+            NavigationView {
+                DiagnosticView(monitor: monitor)
+            }
+            .tabItem {
+                Image(systemName: "stethoscope")
+                Text("Chẩn Đoán")
+            }
+            
+            // TAB 4: Đặc Quyền
             NavigationView {
                 SecurityScannerView()
             }
